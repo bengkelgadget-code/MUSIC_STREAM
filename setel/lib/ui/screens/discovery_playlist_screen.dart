@@ -49,10 +49,20 @@ class _DiscoveryPlaylistScreenState
         'full album',
         'kompilasi',
         'nonstop',
+        'non stop',
         '1 jam',
         '2 jam',
         '3 jam',
         '24 jam',
+        'spotify',
+        'playlist',
+        'kumpulan lagu',
+        'kumpulan musik',
+        'lagu santai viral',
+        'top 100',
+        'top 50',
+        'mix lagu',
+        'remix nonstop',
       ];
 
       bool hasBannedKeyword(Song song) {
@@ -67,7 +77,6 @@ class _DiscoveryPlaylistScreenState
 
       // Filter bertingkat:
       // Tahap 1 (ketat): buang durasi > 10 menit (600000 ms) + keyword kompilasi.
-      // Video yang durasinya tak diketahui (0) TETAP ditampilkan.
       final stage1 = results.where((song) {
         if (hasBannedKeyword(song)) return false;
         if (song.durationMs > 0 && song.durationMs > 600000) return false;

@@ -12,8 +12,29 @@ import 'package:setel/models/search_cache.dart';
 import 'package:setel/models/settings.dart';
 import 'package:setel/models/song.dart';
 import 'package:setel/services/audio_player_service.dart';
+import 'package:setel/services/youtube_service.dart';
 import 'package:setel/state/providers.dart';
 import 'package:setel/ui/screens/home_search_screen.dart';
+
+class DummyYouTubeService implements YouTubeService {
+  @override
+  Future<List<Song>> search(String query, {int limit = 25}) async => [];
+  @override
+  Future<AudioStreamResult> resolveStreamUrl(String videoId,
+          {int clientStartIndex = 0}) async =>
+      AudioStreamResult(
+          url: Uri.parse('https://example.com/audio.m4a'), headers: {});
+  @override
+  Future<List<String>> getSuggestions(String query) async => [];
+  @override
+  Future<Song> fetchMetadata(String videoId) async => const Song(
+        videoId: 's1',
+        title: 'Title',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+}
 
 class DummyAudioPlayerService implements AudioPlayerService {
   @override
@@ -89,6 +110,8 @@ void main() {
           overrides: [
             audioPlayerServiceProvider
                 .overrideWithValue(DummyAudioPlayerService()),
+            youtubeServiceProvider
+                .overrideWithValue(DummyYouTubeService()),
           ],
           child: const MaterialApp(
             home: HomeSearchScreen(),

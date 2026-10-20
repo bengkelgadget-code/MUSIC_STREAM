@@ -411,7 +411,33 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
   @override
   Future<void> seek(Duration position) async {
-    await _player.seek(position);
+    try {
+      await _player.seek(position);
+    } catch (e) {
+      debugPrint(
+          'Error saat seek: $e. Mencoba memulihkan pemutaran pada posisi $position...');
+      if (_currentSong != null) {
+        try {
+          final freshStream = await _youTubeService.resolveStreamUrl(
+            _currentSong!.videoId,
+            clientStartIndex: 1,
+          );
+          final audioSource = YouTubeAudioSource(
+            uri: freshStream.url,
+            headers: freshStream.headers,
+            totalBytes: freshStream.totalBytes,
+            contentType: freshStream.contentType,
+            tag: _currentSong,
+          );
+          await _player.setAudioSource(audioSource, initialPosition: position);
+          await _player.play();
+        } catch (_) {
+          throw AppException('Gagal mempercepat lagu: $e', e);
+        }
+      } else {
+        throw AppException('Gagal mempercepat lagu: $e', e);
+      }
+    }
   }
 
   @override

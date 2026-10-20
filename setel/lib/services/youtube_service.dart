@@ -40,22 +40,25 @@ AudioStreamInfo selectStreamByFormat(
   Iterable<AudioStreamInfo> streams,
   String format,
 ) {
+  final list = streams.toList();
+  if (list.isEmpty) throw StateError('No streams available');
   switch (format) {
     case 'Hemat Data':
-      return streams.reduce((a, b) =>
-          a.bitrate.bitsPerSecond < b.bitrate.bitsPerSecond ? a : b);
+      list.sort((a, b) => a.bitrate.compareTo(b.bitrate));
+      return list.first;
     case 'Seimbang':
       final under128 =
-          streams.where((s) => s.bitrate.kiloBitsPerSecond <= 128).toList();
+          list.where((s) => s.bitrate.kiloBitsPerSecond <= 128).toList();
       if (under128.isNotEmpty) {
-        return under128.reduce((a, b) =>
-            a.bitrate.bitsPerSecond > b.bitrate.bitsPerSecond ? a : b);
+        under128.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+        return under128.first;
       }
-      return streams.reduce((a, b) =>
-          a.bitrate.bitsPerSecond < b.bitrate.bitsPerSecond ? a : b);
+      list.sort((a, b) => a.bitrate.compareTo(b.bitrate));
+      return list.first;
     case 'Tertinggi':
     default:
-      return streams.withHighestBitrate();
+      list.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      return list.last;
   }
 }
 
@@ -488,6 +491,36 @@ class YouTubeServiceImpl implements YouTubeService {
       } finally {
         yt.close();
       }
+    }
+
+    // Fallback penyelamat: jika semua klien audioOnly gagal me-resolve,
+    // ambil stream progressive muxed (itag 18) yang memiliki ratebypass=yes
+    // agar lagu tetap BUNYI dan tidak crash bagi user.
+    final ytFallback = YoutubeExplode();
+    try {
+      final manifest = await ytFallback.videos.streamsClient.getManifest(
+        videoId,
+        requireWatchPage: false,
+        ytClients: [YoutubeApiClient.androidSdkless],
+      );
+      if (manifest.muxed.isNotEmpty) {
+        final muxed = manifest.muxed.withHighestBitrate();
+        debugPrint(
+            'Fallback muxed berhasil untuk videoId: $videoId (tag: ${muxed.tag})');
+        return AudioStreamResult(
+          url: muxed.url,
+          headers: {
+            'User-Agent':
+                'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'
+          },
+          clientName: 'androidSdkless-muxed-fallback',
+          totalBytes: muxed.size.totalBytes,
+          contentType: 'audio/mp4',
+        );
+      }
+    } catch (_) {
+    } finally {
+      ytFallback.close();
     }
 
     throw AppException(

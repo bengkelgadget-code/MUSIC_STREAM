@@ -3,9 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 
-import '../../core/constants.dart';
 import '../../core/discovery_categories.dart';
 import '../../models/song.dart';
 import '../../services/update_service.dart';
@@ -206,89 +204,100 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
     );
   }
 
-  Widget _buildMostPlayedSection() {
-    if (!Hive.isBoxOpen(BOX_PLAY_COUNTS)) {
-      return const SizedBox.shrink();
-    }
-    final playCountsBox = Hive.box<int>(BOX_PLAY_COUNTS);
+  Widget _buildTrendingSection() {
+    final ytService = ref.read(youtubeServiceProvider);
 
-    return ValueListenableBuilder<Box<int>>(
-      valueListenable: playCountsBox.listenable(),
-      builder: (context, box, _) {
-        final libraryService = ref.read(libraryServiceProvider);
-        return FutureBuilder<List<Song>>(
-          future: libraryService.getMostPlayed(limit: 10),
-          builder: (context, snapshot) {
-            final mostPlayed = snapshot.data ?? [];
-            if (mostPlayed.isEmpty) {
-              return const SizedBox.shrink();
-            }
+    return FutureBuilder<List<Song>>(
+      future: ytService
+          .search('lagu pop indonesia terbaru official video', limit: 15),
+      builder: (context, snapshot) {
+        final trendingSongs = (snapshot.data ?? [])
+            .where((s) => s.durationMs > 0 && s.durationMs <= 600000)
+            .take(10)
+            .toList();
 
-            final playerState = ref.watch(playerControllerProvider);
-            final playerController =
-                ref.read(playerControllerProvider.notifier);
-            final libraryState = ref.watch(libraryControllerProvider);
-            final libraryController =
-                ref.read(libraryControllerProvider.notifier);
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildSectionHeader('Paling Sering Didengar 🔥'),
-                const SizedBox(height: 8),
-                ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: mostPlayed.length,
-                  separatorBuilder: (context, index) => const Divider(
-                    color: Colors.white10,
-                    height: 1,
-                    indent: 80,
+        if (trendingSongs.isEmpty) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24.0),
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor:
+                        AlwaysStoppedAnimation<Color>(Color(0xFF1DB954)),
                   ),
-                  itemBuilder: (context, index) {
-                    final song = mostPlayed[index];
-                    final count = box.get(song.videoId) ?? 0;
-                    final isCurrent =
-                        playerState.currentSong?.videoId == song.videoId;
-                    final isPlaying = isCurrent && playerState.isPlaying;
-                    final isFavorite =
-                        libraryState.favoriteIds.contains(song.videoId);
+                ),
+              ),
+            );
+          }
+          return const SizedBox.shrink();
+        }
 
-                    return SongTile(
-                      song: song,
-                      isCurrent: isCurrent,
-                      isPlaying: isPlaying,
-                      isFavorite: isFavorite,
-                      playCountText: '${count}x diputar',
-                      onTap: () {
-                        playerController.playQueue(
-                          mostPlayed,
-                          startIndex: index,
-                        );
-                      },
-                      onToggleFavorite: () {
-                        libraryController.toggleFavorite(song);
-                      },
-                      onPlayNext: () {
-                        playerController.addToQueueNext(song);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            duration: const Duration(seconds: 2),
-                            content:
-                                Text('"${song.title}" diputar berikutnya'),
-                            backgroundColor: const Color(0xFF282828),
-                          ),
-                        );
-                      },
-                      onAddToPlaylist: () {
-                        _showAddToPlaylistDialog(context, song);
-                      },
+        final playerState = ref.watch(playerControllerProvider);
+        final playerController =
+            ref.read(playerControllerProvider.notifier);
+        final libraryState = ref.watch(libraryControllerProvider);
+        final libraryController =
+            ref.read(libraryControllerProvider.notifier);
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildSectionHeader('Paling Sering Diputar di YouTube 🔥'),
+            const SizedBox(height: 8),
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: trendingSongs.length,
+              separatorBuilder: (context, index) => const Divider(
+                color: Colors.white10,
+                height: 1,
+                indent: 80,
+              ),
+              itemBuilder: (context, index) {
+                final song = trendingSongs[index];
+                final isCurrent =
+                    playerState.currentSong?.videoId == song.videoId;
+                final isPlaying = isCurrent && playerState.isPlaying;
+                final isFavorite =
+                    libraryState.favoriteIds.contains(song.videoId);
+
+                return SongTile(
+                  song: song,
+                  isCurrent: isCurrent,
+                  isPlaying: isPlaying,
+                  isFavorite: isFavorite,
+                  playCountText: '#${index + 1} Trending',
+                  onTap: () {
+                    playerController.playQueue(
+                      trendingSongs,
+                      startIndex: index,
                     );
                   },
-                ),
-              ],
-            );
-          },
+                  onToggleFavorite: () {
+                    libraryController.toggleFavorite(song);
+                  },
+                  onPlayNext: () {
+                    playerController.addToQueueNext(song);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        duration: const Duration(seconds: 2),
+                        content:
+                            Text('"${song.title}" diputar berikutnya'),
+                        backgroundColor: const Color(0xFF282828),
+                      ),
+                    );
+                  },
+                  onAddToPlaylist: () {
+                    _showAddToPlaylistDialog(context, song);
+                  },
+                );
+              },
+            ),
+          ],
         );
       },
     );
@@ -340,7 +349,7 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
           ),
         ),
         const SizedBox(height: 28),
-        _buildMostPlayedSection(),
+        _buildTrendingSection(),
       ],
     );
   }

@@ -45,6 +45,10 @@ class YouTubeAudioSource extends StreamAudioSource {
           if (resp.statusCode != 206 && resp.statusCode != 200) {
             debugPrint(
                 'YouTubeAudioSource: Gagal streaming chunk $current-$to, status: ${resp.statusCode}');
+            if (current > startByte) {
+              // Sudah ada sebagian chunk yang terkirim; akhiri stream dengan aman agar player tidak crash
+              break;
+            }
             throw HttpException('Gagal streaming chunk: ${resp.statusCode}');
           }
           await for (final chunk in resp) {
