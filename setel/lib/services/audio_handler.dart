@@ -37,17 +37,22 @@ class SetelAudioHandler extends BaseAudioHandler
   }) {
     playbackState.add(
       playbackState.value.copyWith(
-        controls: [
-          MediaControl.skipToPrevious,
-          isPlaying ? MediaControl.pause : MediaControl.play,
-          MediaControl.skipToNext,
-        ],
-        systemActions: const {
-          MediaAction.seek,
-          MediaAction.seekForward,
-          MediaAction.seekBackward,
-        },
-        androidCompactActionIndices: const [0, 1, 2],
+        controls: mediaItem.value == null
+            ? const []
+            : [
+                MediaControl.skipToPrevious,
+                isPlaying ? MediaControl.pause : MediaControl.play,
+                MediaControl.skipToNext,
+              ],
+        systemActions: mediaItem.value == null
+            ? const {}
+            : const {
+                MediaAction.seek,
+                MediaAction.seekForward,
+                MediaAction.seekBackward,
+              },
+        androidCompactActionIndices:
+            mediaItem.value == null ? const [] : const [0, 1, 2],
         processingState: isBuffering
             ? AudioProcessingState.buffering
             : (isPlaying
@@ -73,6 +78,19 @@ class SetelAudioHandler extends BaseAudioHandler
         artist: artist,
         artUri: Uri.tryParse(thumbnailUrl),
         duration: duration,
+      ),
+    );
+  }
+
+  void clearMediaItem() {
+    mediaItem.add(null);
+    playbackState.add(
+      playbackState.value.copyWith(
+        controls: const [],
+        systemActions: const {},
+        androidCompactActionIndices: const [],
+        processingState: AudioProcessingState.idle,
+        playing: false,
       ),
     );
   }

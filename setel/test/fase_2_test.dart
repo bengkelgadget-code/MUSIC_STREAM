@@ -1,3 +1,4 @@
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:setel/models/song.dart';
 import 'package:setel/services/audio_handler.dart';
@@ -53,6 +54,22 @@ void main() {
       expect(handler.mediaItem.value?.id, songA.videoId);
       expect(handler.mediaItem.value?.title, songA.title);
       expect(handler.playbackState.value.playing, isTrue);
+    });
+
+    test('SetelAudioHandler clearMediaItem clears mediaItem and sets idle state', () {
+      handler.setMediaItemInfo(
+        id: songA.videoId,
+        title: songA.title,
+        artist: songA.artist,
+        thumbnailUrl: songA.thumbnailUrl,
+      );
+      expect(handler.mediaItem.value, isNotNull);
+
+      handler.clearMediaItem();
+      expect(handler.mediaItem.value, isNull);
+      expect(handler.playbackState.value.playing, isFalse);
+      expect(handler.playbackState.value.processingState, AudioProcessingState.idle);
+      expect(handler.playbackState.value.controls, isEmpty);
     });
 
     test('Headset button callbacks dispatch to play, pause, next, prev',

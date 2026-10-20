@@ -397,7 +397,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
     if (index == _currentIndex) {
       if (_queue.length == 1) {
-        _player.pause();
+        _player.stop();
+        _audioHandler.clearMediaItem();
         _queue.clear();
         _currentIndex = -1;
         _currentSong = null;
@@ -415,12 +416,19 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         _currentIndex--;
       }
       _queue.removeAt(index);
+      if (_queue.isEmpty) {
+        _player.stop();
+        _audioHandler.clearMediaItem();
+        _currentIndex = -1;
+        _currentSong = null;
+      }
       _emitState();
     }
   }
 
   void clearQueue() {
-    _player.pause();
+    _player.stop();
+    _audioHandler.clearMediaItem();
     _queue.clear();
     _currentIndex = -1;
     _currentSong = null;
