@@ -31,6 +31,9 @@ class ThrottledYouTubeService implements YouTubeService {
       resolveFuture;
 
   @override
+  Future<List<String>> getSuggestions(String query) async => [];
+
+  @override
   Future<Song> fetchMetadata(String videoId) async => const Song(
         videoId: 'slow_net_1',
         title: 'Title',
@@ -111,7 +114,8 @@ void main() {
     await Hive.openBox<String>(BOX_FAVORITES);
     await Hive.openBox<HistoryEntry>(BOX_HISTORY);
     await Hive.openBox<SearchCache>(BOX_SEARCH_CACHE);
-    await Hive.openBox<Settings>(BOX_SETTINGS);
+    await Hive.openBox(BOX_SETTINGS);
+    await Hive.openBox<int>(BOX_PLAY_COUNTS);
   });
 
   tearDownAll(() async {

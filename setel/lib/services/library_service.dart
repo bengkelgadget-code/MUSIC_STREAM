@@ -22,6 +22,12 @@ abstract class LibraryService {
   /// FIFO, maks 50 entri. Yang lama dibuang otomatis.
   Future<void> recordPlay(Song song);
   Future<List<HistoryEntry>> getHistory();
+
+  /// Ambil lagu yang paling sering diputar terurut menurun berdasarkan play count
+  Future<List<Song>> getMostPlayed({int limit = 10});
+
+  /// Ambil jumlah putar untuk sebuah lagu
+  Future<int> getPlayCount(String videoId);
 }
 
 class LibraryServiceImpl implements LibraryService {
@@ -160,6 +166,13 @@ class LibraryServiceImpl implements LibraryService {
       ),
     );
 
+    // Tambah play count (+1)
+    final playCountsBox = Hive.isBoxOpen(BOX_PLAY_COUNTS)
+        ? Hive.box<int>(BOX_PLAY_COUNTS)
+        : await Hive.openBox<int>(BOX_PLAY_COUNTS);
+    final count = playCountsBox.get(song.videoId) ?? 0;
+    await playCountsBox.put(song.videoId, count + 1);
+
     // FIFO maks 50 entri sesuai kontrak §4.3
     while (historyBox.length > MAX_HISTORY_ENTRIES) {
       await historyBox.deleteAt(0);
@@ -171,6 +184,36 @@ class LibraryServiceImpl implements LibraryService {
     final historyBox = Hive.box<HistoryEntry>(BOX_HISTORY);
     // Kembalikan dari yang paling baru dimainkan (reverse FIFO)
     return historyBox.values.toList().reversed.toList();
+  }
+
+  @override
+  Future<List<Song>> getMostPlayed({int limit = 10}) async {
+    final playCountsBox = Hive.isBoxOpen(BOX_PLAY_COUNTS)
+        ? Hive.box<int>(BOX_PLAY_COUNTS)
+        : await Hive.openBox<int>(BOX_PLAY_COUNTS);
+    final songsBox = Hive.box<Song>(BOX_SONGS);
+
+    if (playCountsBox.isEmpty) return [];
+
+    final entries = playCountsBox.toMap().entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final result = <Song>[];
+    for (final entry in entries) {
+      final song = songsBox.get(entry.key.toString());
+      if (song != null) {
+        result.add(song);
+        if (result.length >= limit) break;
+      }
+    }
+    return result;
+  }
+
+  @override
+  Future<int> getPlayCount(String videoId) async {
+    if (!Hive.isBoxOpen(BOX_PLAY_COUNTS)) return 0;
+    final playCountsBox = Hive.box<int>(BOX_PLAY_COUNTS);
+    return playCountsBox.get(videoId) ?? 0;
   }
 
   Future<List<Song>> getSongsForPlaylist(String playlistId) async {

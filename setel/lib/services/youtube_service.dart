@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
@@ -7,6 +9,44 @@ import '../core/constants.dart';
 import '../core/errors.dart';
 import '../models/search_cache.dart';
 import '../models/song.dart';
+
+int parseIso8601Duration(String isoDuration) {
+  if (isoDuration.isEmpty) return 0;
+  final regex = RegExp(r'P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?');
+  final match = regex.firstMatch(isoDuration);
+  if (match == null) return 0;
+
+  final days = int.tryParse(match.group(1) ?? '0') ?? 0;
+  final hours = int.tryParse(match.group(2) ?? '0') ?? 0;
+  final minutes = int.tryParse(match.group(3) ?? '0') ?? 0;
+  final seconds = int.tryParse(match.group(4) ?? '0') ?? 0;
+
+  return ((days * 24 * 3600) + (hours * 3600) + (minutes * 60) + seconds) *
+      1000;
+}
+
+AudioStreamInfo selectStreamByFormat(
+  Iterable<AudioStreamInfo> streams,
+  String format,
+) {
+  switch (format) {
+    case 'Hemat Data':
+      return streams.reduce((a, b) =>
+          a.bitrate.bitsPerSecond < b.bitrate.bitsPerSecond ? a : b);
+    case 'Seimbang':
+      final under128 =
+          streams.where((s) => s.bitrate.kiloBitsPerSecond <= 128).toList();
+      if (under128.isNotEmpty) {
+        return under128.reduce((a, b) =>
+            a.bitrate.bitsPerSecond > b.bitrate.bitsPerSecond ? a : b);
+      }
+      return streams.reduce((a, b) =>
+          a.bitrate.bitsPerSecond < b.bitrate.bitsPerSecond ? a : b);
+    case 'Tertinggi':
+    default:
+      return streams.withHighestBitrate();
+  }
+}
 
 class AudioStreamResult {
   final Uri url;
@@ -40,19 +80,20 @@ class AudioStreamResult {
 }
 
 abstract class YouTubeService {
-  /// Cari lagu via YouTube Data API v3. WAJIB cek SearchCache dulu (TTL 24 jam).
-  /// 1x search = 100 unit kuota. Error kuota → AppException('Kuota API habis...').
+  /// Cari lagu via YouTube Data API v3 atau Explode Engine. WAJIB cek SearchCache dulu (TTL 24 jam).
   Future<List<Song>> search(String query);
 
   /// Resolve stream URL audio-only via youtube_explode_dart.
-  /// Pilih audio-only dengan bitrate tertinggi. JANGAN simpan hasilnya ke DB.
+  /// Memilih audio-only sesuai format stream yang aktif (Tertinggi, Seimbang, atau Hemat Data).
   /// Mengambil manifest dari SATU klien per percobaan, urutan tangga:
-  /// (a) YoutubeApiClient.androidVr, (b) YoutubeApiClient.ios, (c) YoutubeApiClient.tv.
-  /// Mengembalikan (url, headers) berisi User-Agent sesuai klien yang menghasilkan URL tsb.
+  /// (a) YoutubeApiClient.androidSdkless, (b) androidVr, (c) android, (d) ios, (e) tv.
   Future<AudioStreamResult> resolveStreamUrl(
     String videoId, {
     int clientStartIndex = 0,
   });
+
+  /// Ambil saran pencarian dari endpoint YouTube Suggest API (maksimal 8 saran).
+  Future<List<String>> getSuggestions(String query);
 
   /// Metadata cadangan via iTunes Search API (tanpa key), dipakai jika perlu.
   Future<Song> fetchMetadata(String videoId);
@@ -62,6 +103,50 @@ class YouTubeServiceImpl implements YouTubeService {
   final Dio _dio;
 
   YouTubeServiceImpl({Dio? dio}) : _dio = dio ?? Dio();
+
+  @override
+  Future<List<String>> getSuggestions(String query) async {
+    final cleanQuery = query.trim();
+    if (cleanQuery.isEmpty) return [];
+
+    try {
+      final response = await _dio.get(
+        'https://suggestqueries.google.com/complete/search',
+        queryParameters: {
+          'client': 'firefox',
+          'ds': 'yt',
+          'q': cleanQuery,
+        },
+        options: Options(
+          responseType: ResponseType.plain,
+          receiveTimeout: const Duration(seconds: 4),
+          sendTimeout: const Duration(seconds: 4),
+        ),
+      );
+
+      if (response.statusCode != 200 || response.data == null) {
+        return [];
+      }
+
+      dynamic data = response.data;
+      if (data is String) {
+        data = jsonDecode(data);
+      }
+
+      if (data is List && data.length > 1 && data[1] is List) {
+        final suggestions = (data[1] as List)
+            .map((e) => e.toString())
+            .where((s) => s.trim().isNotEmpty)
+            .take(8)
+            .toList();
+        return suggestions;
+      }
+      return [];
+    } catch (e) {
+      debugPrint('Gagal mengambil saran pencarian: $e');
+      return [];
+    }
+  }
 
   @override
   Future<List<Song>> search(String query) async {
@@ -97,8 +182,34 @@ class YouTubeServiceImpl implements YouTubeService {
     debugPrint('SearchCache MISS: "$query". Querying YouTube...');
     List<Song> songs = [];
 
-    // 2. Jika API key diisi manual oleh user, gunakan YouTube Data API v3
-    if (YOUTUBE_API_KEY.isNotEmpty && YOUTUBE_API_KEY != 'ISI_DI_SINI') {
+    // Mode Akses Katalog dari Settings
+    final settingsBox =
+        Hive.isBoxOpen(BOX_SETTINGS) ? Hive.box(BOX_SETTINGS) : null;
+    final catalogMode =
+        (settingsBox?.get('catalog_mode', defaultValue: 'Otomatis')
+                as String?) ??
+            'Otomatis';
+
+    final hasApiKey =
+        YOUTUBE_API_KEY.isNotEmpty && YOUTUBE_API_KEY != 'ISI_DI_SINI';
+
+    final bool useDataApi;
+    if (catalogMode == 'Explode') {
+      useDataApi = false;
+    } else if (catalogMode == 'Data API') {
+      if (!hasApiKey) {
+        throw AppException(
+          'Kunci YouTube API belum dikonfigurasi. Silakan periksa kunci API di pengaturan atau constants.dart.',
+        );
+      }
+      useDataApi = true;
+    } else {
+      // 'Otomatis'
+      useDataApi = hasApiKey;
+    }
+
+    // 2. Jika useDataApi, gunakan YouTube Data API v3
+    if (useDataApi) {
       try {
         final response = await _dio.get(
           'https://www.googleapis.com/youtube/v3/search',
@@ -132,6 +243,37 @@ class YouTubeServiceImpl implements YouTubeService {
             thumbnailUrl: thumbnailUrl,
           );
         }).toList();
+
+        // Perkaya durationMs via videos.list?part=contentDetails (1 batch call)
+        if (songs.isNotEmpty) {
+          final videoIds = songs.map((s) => s.videoId).join(',');
+          try {
+            final detailsResp = await _dio.get(
+              'https://www.googleapis.com/youtube/v3/videos',
+              queryParameters: {
+                'part': 'contentDetails',
+                'id': videoIds,
+                'key': YOUTUBE_API_KEY,
+              },
+            );
+            final detailItems =
+                (detailsResp.data['items'] as List<dynamic>?) ?? [];
+            final durationMap = <String, int>{};
+            for (final dItem in detailItems) {
+              final vId = dItem['id'] as String?;
+              final durStr = dItem['contentDetails']?['duration'] as String?;
+              if (vId != null && durStr != null) {
+                durationMap[vId] = parseIso8601Duration(durStr);
+              }
+            }
+            songs = songs.map((s) {
+              final d = durationMap[s.videoId];
+              return d != null && d > 0 ? s.copyWith(durationMs: d) : s;
+            }).toList();
+          } catch (e) {
+            debugPrint('Gagal memperkaya durasi video: $e');
+          }
+        }
       } on DioException catch (e) {
         if (e.response?.statusCode == 403) {
           throw AppException(
@@ -228,7 +370,8 @@ class YouTubeServiceImpl implements YouTubeService {
     int clientStartIndex = 0,
   }) async {
     // ATURAN EMAS: Resolve stream URL audio-only via youtube_explode_dart.
-    // Pilih audio-only dengan bitrate tertinggi. JANGAN simpan hasilnya ke DB.
+    // Format dipilih sesuai pengaturan (Tertinggi, Seimbang, atau Hemat Data).
+    // JANGAN simpan hasilnya ke DB.
     final startIndex =
         (clientStartIndex >= 0 && clientStartIndex < streamClients.length)
             ? clientStartIndex
@@ -239,13 +382,20 @@ class YouTubeServiceImpl implements YouTubeService {
       ...streamClients.sublist(0, startIndex),
     ];
 
+    final settingsBox =
+        Hive.isBoxOpen(BOX_SETTINGS) ? Hive.box(BOX_SETTINGS) : null;
+    final streamFormat =
+        (settingsBox?.get('stream_format', defaultValue: 'Tertinggi')
+                as String?) ??
+            'Tertinggi';
+
     Object? lastError;
 
     for (final candidate in candidateClients) {
       final yt = YoutubeExplode();
       try {
         debugPrint(
-            'Mencoba resolve stream videoId: $videoId dengan klien: ${candidate.name}');
+            'Mencoba resolve stream videoId: $videoId dengan klien: ${candidate.name} (format: $streamFormat)');
         final manifest = await yt.videos.streamsClient.getManifest(
           videoId,
           requireWatchPage: false,
@@ -253,12 +403,12 @@ class YouTubeServiceImpl implements YouTubeService {
         );
         final audioStreams = manifest.audioOnly;
         if (audioStreams.isNotEmpty) {
-          final audioStream = audioStreams.withHighestBitrate();
+          final audioStream = selectStreamByFormat(audioStreams, streamFormat);
           final contentType =
               audioStream.container.name == 'webm' ? 'audio/webm' : 'audio/mp4';
           debugPrint(
               'Berhasil me-resolve stream audio untuk videoId: $videoId '
-              'menggunakan ${candidate.name} (${audioStream.container.name}, tag: ${audioStream.tag}, ${audioStream.bitrate.kiloBitsPerSecond} kbps, ${audioStream.size.totalBytes} bytes)');
+              'menggunakan ${candidate.name} (format: $streamFormat, ${audioStream.container.name}, tag: ${audioStream.tag}, ${audioStream.bitrate.kiloBitsPerSecond} kbps, ${audioStream.size.totalBytes} bytes)');
           return AudioStreamResult(
             url: audioStream.url,
             headers: {'User-Agent': candidate.userAgent},
@@ -268,7 +418,8 @@ class YouTubeServiceImpl implements YouTubeService {
           );
         }
       } catch (e) {
-        debugPrint('Klien ${candidate.name} gagal me-resolve video $videoId: $e');
+        debugPrint(
+            'Klien ${candidate.name} gagal me-resolve video $videoId: $e');
         lastError = e;
       } finally {
         yt.close();

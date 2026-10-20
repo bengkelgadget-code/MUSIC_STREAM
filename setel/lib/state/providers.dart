@@ -65,14 +65,12 @@ final libraryControllerProvider =
 class SettingsController extends Notifier<int> {
   @override
   int build() {
-    final box = Hive.box<Settings>(BOX_SETTINGS);
-    final settings = box.get(0);
-    return settings?.cacheLimitMB ?? DEFAULT_CACHE_LIMIT_MB;
+    if (!Hive.isBoxOpen(BOX_SETTINGS)) return DEFAULT_CACHE_LIMIT_MB; final box = Hive.box(BOX_SETTINGS); final raw = box.get(0); if (raw is Settings) return raw.cacheLimitMB; return DEFAULT_CACHE_LIMIT_MB;
   }
 
   Future<void> setCacheLimit(int limitMB) async {
     state = limitMB;
-    final box = Hive.box<Settings>(BOX_SETTINGS);
+    final box = Hive.box(BOX_SETTINGS);
     await box.put(0, Settings(cacheLimitMB: limitMB));
 
     final cacheService = ref.read(cacheServiceProvider);

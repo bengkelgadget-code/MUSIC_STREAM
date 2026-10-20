@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
+import '../../core/constants.dart';
 import '../../core/discovery_categories.dart';
 import '../../models/song.dart';
 import '../../services/update_service.dart';
@@ -19,6 +22,8 @@ class HomeSearchScreen extends ConsumerStatefulWidget {
 
 class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
   final TextEditingController _textController = TextEditingController();
+  Timer? _debounceTimer;
+  List<String> _suggestions = [];
 
   @override
   void initState() {
@@ -32,11 +37,16 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
     _textController.dispose();
     super.dispose();
   }
 
   void _onSearch() {
+    _debounceTimer?.cancel();
+    setState(() {
+      _suggestions = [];
+    });
     final query = _textController.text.trim();
     if (query.isNotEmpty) {
       FocusScope.of(context).unfocus();
@@ -109,8 +119,7 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                                       duration: const Duration(seconds: 2),
                                       content: Text(
                                           'Ditambahkan ke playlist "${playlist.name}"'),
-                                      backgroundColor:
-                                          const Color(0xFF282828),
+                                      backgroundColor: const Color(0xFF282828),
                                     ),
                                   );
                                 }
@@ -134,27 +143,24 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
   }
 
   void _showCreatePlaylistDialog(BuildContext context, {Song? songToAdd}) {
-    final textController = TextEditingController();
-    final libraryController = ref.read(libraryControllerProvider.notifier);
-
+    final controller = TextEditingController();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF282828),
-        title: const Text('Buat Playlist Baru',
+        title: const Text('Playlist Baru',
             style: TextStyle(color: Colors.white)),
         content: TextField(
-          controller: textController,
+          controller: controller,
           autofocus: true,
           style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            hintText: 'Nama Playlist',
-            hintStyle: const TextStyle(color: Colors.white38),
+          decoration: const InputDecoration(
+            hintText: 'Nama playlist',
+            hintStyle: TextStyle(color: Colors.white38),
             enabledBorder: UnderlineInputBorder(
-              borderSide:
-                  BorderSide(color: Colors.white.withValues(alpha: 0.2)),
+              borderSide: BorderSide(color: Colors.white24),
             ),
-            focusedBorder: const UnderlineInputBorder(
+            focusedBorder: UnderlineInputBorder(
               borderSide: BorderSide(color: Color(0xFF1DB954)),
             ),
           ),
@@ -171,13 +177,15 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
               foregroundColor: Colors.white,
             ),
             onPressed: () async {
-              final name = textController.text.trim();
+              final name = controller.text.trim();
               if (name.isNotEmpty) {
-                final playlist =
-                    await libraryController.createPlaylist(name);
+                final playlist = await ref
+                    .read(libraryControllerProvider.notifier)
+                    .createPlaylist(name);
                 if (songToAdd != null) {
-                  await libraryController.addToPlaylist(
-                      playlist.id, songToAdd);
+                  await ref
+                      .read(libraryControllerProvider.notifier)
+                      .addToPlaylist(playlist.id, songToAdd);
                 }
                 if (ctx.mounted) Navigator.pop(ctx);
                 if (context.mounted) {
@@ -195,6 +203,98 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildMostPlayedSection() {
+    if (!Hive.isBoxOpen(BOX_PLAY_COUNTS)) {
+      return const SizedBox.shrink();
+    }
+    final playCountsBox = Hive.box<int>(BOX_PLAY_COUNTS);
+
+    return ValueListenableBuilder<Box<int>>(
+      valueListenable: playCountsBox.listenable(),
+      builder: (context, box, _) {
+        if (box.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        final libraryService = ref.read(libraryServiceProvider);
+        return FutureBuilder<List<Song>>(
+          future: libraryService.getMostPlayed(limit: 10),
+          builder: (context, snapshot) {
+            final mostPlayed = snapshot.data ?? [];
+            if (mostPlayed.isEmpty) {
+              return const SizedBox.shrink();
+            }
+
+            final playerState = ref.watch(playerControllerProvider);
+            final playerController =
+                ref.read(playerControllerProvider.notifier);
+            final libraryState = ref.watch(libraryControllerProvider);
+            final libraryController =
+                ref.read(libraryControllerProvider.notifier);
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildSectionHeader('Paling Sering Didengar 🔥'),
+                const SizedBox(height: 8),
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: mostPlayed.length,
+                  separatorBuilder: (context, index) => const Divider(
+                    color: Colors.white10,
+                    height: 1,
+                    indent: 80,
+                  ),
+                  itemBuilder: (context, index) {
+                    final song = mostPlayed[index];
+                    final count = box.get(song.videoId) ?? 0;
+                    final isCurrent =
+                        playerState.currentSong?.videoId == song.videoId;
+                    final isPlaying = isCurrent && playerState.isPlaying;
+                    final isFavorite =
+                        libraryState.favoriteIds.contains(song.videoId);
+
+                    return SongTile(
+                      song: song,
+                      isCurrent: isCurrent,
+                      isPlaying: isPlaying,
+                      isFavorite: isFavorite,
+                      playCountText: '${count}x diputar',
+                      onTap: () {
+                        playerController.playQueue(
+                          mostPlayed,
+                          startIndex: index,
+                        );
+                      },
+                      onToggleFavorite: () {
+                        libraryController.toggleFavorite(song);
+                      },
+                      onPlayNext: () {
+                        playerController.addToQueueNext(song);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            duration: const Duration(seconds: 2),
+                            content:
+                                Text('"${song.title}" diputar berikutnya'),
+                            backgroundColor: const Color(0xFF282828),
+                          ),
+                        );
+                      },
+                      onAddToPlaylist: () {
+                        _showAddToPlaylistDialog(context, song);
+                      },
+                    );
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -243,6 +343,8 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
             },
           ),
         ),
+        const SizedBox(height: 28),
+        _buildMostPlayedSection(),
       ],
     );
   }
@@ -311,8 +413,10 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                       icon: const Icon(Icons.clear,
                           color: Colors.white54, size: 20),
                       onPressed: () {
+                        _debounceTimer?.cancel();
                         setState(() {
                           _textController.clear();
+                          _suggestions = [];
                         });
                         ref.read(searchControllerProvider.notifier).clear();
                       },
@@ -323,124 +427,194 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             ),
             onChanged: (text) {
-              setState(() {});
-              if (text.isEmpty) {
-                ref.read(searchControllerProvider.notifier).clear();
+              _debounceTimer?.cancel();
+              final query = text.trim();
+              if (query.length < 2) {
+                setState(() {
+                  _suggestions = [];
+                });
+                if (text.isEmpty) {
+                  ref.read(searchControllerProvider.notifier).clear();
+                }
+              } else {
+                setState(() {});
+                _debounceTimer =
+                    Timer(const Duration(milliseconds: 300), () async {
+                  final q = _textController.text.trim();
+                  if (q.length >= 2) {
+                    final ytService = ref.read(youtubeServiceProvider);
+                    final results = await ytService.getSuggestions(q);
+                    if (mounted && _textController.text.trim() == q) {
+                      setState(() {
+                        _suggestions = results;
+                      });
+                    }
+                  }
+                });
               }
             },
           ),
         ),
       ),
-      body: Builder(
-        builder: (context) {
-          if (searchState.isLoading) {
-            return const Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF1DB954)),
-              ),
-            );
-          }
-
-          if (searchState.error != null) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.error_outline,
-                        size: 48, color: Colors.redAccent),
-                    const SizedBox(height: 12),
-                    Text(
-                      searchState.error!,
-                      textAlign: TextAlign.center,
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 14),
-                    ),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1DB954),
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: _onSearch,
-                      child: const Text('Coba Lagi'),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }
-
-          if (searchState.results.isEmpty && searchState.query.isNotEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.search_off, size: 54, color: Colors.white24),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Tidak ditemukan hasil untuk "${searchState.query}"',
-                    style: const TextStyle(color: Colors.white54, fontSize: 14),
+      body: Stack(
+        children: [
+          Builder(
+            builder: (context) {
+              if (searchState.isLoading) {
+                return const Center(
+                  child: CircularProgressIndicator(
+                    valueColor:
+                        AlwaysStoppedAnimation<Color>(Color(0xFF1DB954)),
                   ),
-                ],
-              ),
-            );
-          }
+                );
+              }
 
-          // Saat pencarian kosong, tampilkan Discovery Categories
-          if (searchState.results.isEmpty) {
-            return _buildDiscoverySection();
-          }
-
-          // Hasil Pencarian Aktif
-          return ListView.separated(
-            padding: const EdgeInsets.only(top: 8, bottom: 80),
-            itemCount: searchState.results.length,
-            separatorBuilder: (context, index) => const Divider(
-              color: Colors.white10,
-              height: 1,
-              indent: 80,
-            ),
-            itemBuilder: (context, index) {
-              final song = searchState.results[index];
-              final isCurrent =
-                  playerState.currentSong?.videoId == song.videoId;
-              final isPlaying = isCurrent && playerState.isPlaying;
-              final isFavorite =
-                  libraryState.favoriteIds.contains(song.videoId);
-
-              return SongTile(
-                song: song,
-                isCurrent: isCurrent,
-                isPlaying: isPlaying,
-                isFavorite: isFavorite,
-                onTap: () {
-                  playerController.playQueue(
-                    searchState.results,
-                    startIndex: index,
-                  );
-                },
-                onToggleFavorite: () {
-                  libraryController.toggleFavorite(song);
-                },
-                onPlayNext: () {
-                  playerController.addToQueueNext(song);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      duration: const Duration(seconds: 2),
-                      content: Text('"${song.title}" diputar berikutnya'),
-                      backgroundColor: const Color(0xFF282828),
+              if (searchState.error != null) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.error_outline,
+                            size: 48, color: Colors.redAccent),
+                        const SizedBox(height: 12),
+                        Text(
+                          searchState.error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 14),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1DB954),
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: _onSearch,
+                          child: const Text('Coba Lagi'),
+                        ),
+                      ],
                     ),
+                  ),
+                );
+              }
+
+              if (searchState.results.isEmpty &&
+                  searchState.query.isNotEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.search_off,
+                          size: 54, color: Colors.white24),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Tidak ditemukan hasil untuk "${searchState.query}"',
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 14),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              // Saat pencarian kosong, tampilkan Discovery Categories
+              if (searchState.results.isEmpty) {
+                return _buildDiscoverySection();
+              }
+
+              // Hasil Pencarian Aktif
+              return ListView.separated(
+                padding: const EdgeInsets.only(top: 8, bottom: 80),
+                itemCount: searchState.results.length,
+                separatorBuilder: (context, index) => const Divider(
+                  color: Colors.white10,
+                  height: 1,
+                  indent: 80,
+                ),
+                itemBuilder: (context, index) {
+                  final song = searchState.results[index];
+                  final isCurrent =
+                      playerState.currentSong?.videoId == song.videoId;
+                  final isPlaying = isCurrent && playerState.isPlaying;
+                  final isFavorite =
+                      libraryState.favoriteIds.contains(song.videoId);
+
+                  return SongTile(
+                    song: song,
+                    isCurrent: isCurrent,
+                    isPlaying: isPlaying,
+                    isFavorite: isFavorite,
+                    onTap: () {
+                      playerController.playQueue(
+                        searchState.results,
+                        startIndex: index,
+                      );
+                    },
+                    onToggleFavorite: () {
+                      libraryController.toggleFavorite(song);
+                    },
+                    onPlayNext: () {
+                      playerController.addToQueueNext(song);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          duration: const Duration(seconds: 2),
+                          content: Text('"${song.title}" diputar berikutnya'),
+                          backgroundColor: const Color(0xFF282828),
+                        ),
+                      );
+                    },
+                    onAddToPlaylist: () {
+                      _showAddToPlaylistDialog(context, song);
+                    },
                   );
-                },
-                onAddToPlaylist: () {
-                  _showAddToPlaylistDialog(context, song);
                 },
               );
             },
-          );
-        },
+          ),
+          if (_suggestions.isNotEmpty)
+            Positioned.fill(
+              child: Container(
+                color: const Color(0xFF121212),
+                child: ListView.separated(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: _suggestions.length,
+                  separatorBuilder: (_, index) => const Divider(
+                    color: Colors.white10,
+                    height: 1,
+                    indent: 56,
+                  ),
+                  itemBuilder: (context, index) {
+                    final suggestion = _suggestions[index];
+                    return ListTile(
+                      leading: const Icon(Icons.search,
+                          color: Colors.white54, size: 20),
+                      title: Text(
+                        suggestion,
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 14),
+                      ),
+                      trailing: const Icon(Icons.north_west,
+                          color: Colors.white30, size: 16),
+                      onTap: () {
+                        _debounceTimer?.cancel();
+                        _textController.text = suggestion;
+                        _textController.selection =
+                            TextSelection.fromPosition(
+                          TextPosition(offset: suggestion.length),
+                        );
+                        setState(() {
+                          _suggestions = [];
+                        });
+                        _onSearch();
+                      },
+                    );
+                  },
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

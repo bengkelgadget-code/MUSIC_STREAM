@@ -43,9 +43,33 @@ class _DiscoveryPlaylistScreenState
     try {
       final ytService = ref.read(youtubeServiceProvider);
       final results = await ytService.search(widget.category.searchQuery);
+
+      const bannedKeywords = [
+        'full album',
+        'kompilasi',
+        'nonstop',
+        '1 jam',
+        '2 jam',
+        '3 jam',
+        '24 jam',
+      ];
+
+      final filtered = results.where((song) {
+        if (song.durationMs > 0 && song.durationMs > 600000) {
+          return false;
+        }
+        final titleLower = song.title.toLowerCase();
+        for (final kw in bannedKeywords) {
+          if (titleLower.contains(kw)) {
+            return false;
+          }
+        }
+        return true;
+      }).toList();
+
       if (mounted) {
         setState(() {
-          _songs = results;
+          _songs = filtered;
           _isLoading = false;
         });
       }

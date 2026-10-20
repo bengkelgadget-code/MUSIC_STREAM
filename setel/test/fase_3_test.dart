@@ -31,6 +31,7 @@ void main() {
     await Hive.openBox<Playlist>(BOX_PLAYLISTS);
     await Hive.openBox<String>(BOX_FAVORITES);
     await Hive.openBox<HistoryEntry>(BOX_HISTORY);
+    await Hive.openBox<int>(BOX_PLAY_COUNTS);
   });
 
   tearDownAll(() async {

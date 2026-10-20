@@ -68,6 +68,9 @@ class TestYouTubeService implements YouTubeService {
   }
 
   @override
+  Future<List<String>> getSuggestions(String query) async => [];
+
+  @override
   Future<Song> fetchMetadata(String videoId) async {
     return Song(
       videoId: videoId,

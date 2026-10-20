@@ -34,7 +34,8 @@ class HiveInit {
     await Hive.openBox<String>(BOX_FAVORITES);
     await Hive.openBox<HistoryEntry>(BOX_HISTORY);
     await Hive.openBox<SearchCache>(BOX_SEARCH_CACHE);
-    await Hive.openBox<Settings>(BOX_SETTINGS);
+    await Hive.openBox(BOX_SETTINGS);
+    await Hive.openBox<int>(BOX_PLAY_COUNTS);
 
     debugPrint('Hive initialized and all boxes opened successfully.');
   }

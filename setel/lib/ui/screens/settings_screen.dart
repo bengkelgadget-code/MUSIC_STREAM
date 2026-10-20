@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hive/hive.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/constants.dart';
 import '../../services/update_service.dart';
@@ -139,11 +141,24 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   int _cacheSizeBytes = 0;
   bool _isLoadingCache = true;
+  String _appVersion = '1.2.0+13';
 
   @override
   void initState() {
     super.initState();
     _loadCacheSize();
+    _loadAppVersion();
+  }
+
+  Future<void> _loadAppVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(() {
+          _appVersion = '${info.version}+${info.buildNumber}';
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadCacheSize() async {
@@ -222,17 +237,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF282828),
-        title:
-            const Text('Hapus Cache', style: TextStyle(color: Colors.white)),
+        title: const Text('Hapus Semua Cache?',
+            style: TextStyle(color: Colors.white)),
         content: const Text(
-          'Semua file audio yang diunduh secara offline akan dihapus. Riwayat dan playlist Anda tidak akan terhapus.',
+          'Semua file audio yang telah di-cache untuk pemutaran offline akan dihapus secara permanen. Anda tetap dapat memutar lagu ini secara streaming saat online.',
           style: TextStyle(color: Colors.white70),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child:
-                const Text('Batal', style: TextStyle(color: Colors.white54)),
+            child: const Text('Batal', style: TextStyle(color: Colors.white54)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -260,10 +274,190 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
+  void _showCatalogModeDialog(BuildContext context) {
+    final box =
+        Hive.isBoxOpen(BOX_SETTINGS) ? Hive.box(BOX_SETTINGS) : null;
+    final currentMode =
+        (box?.get('catalog_mode', defaultValue: 'Otomatis') as String?) ??
+            'Otomatis';
+
+    const modes = [
+      (
+        'Otomatis',
+        'Otomatis (Default)',
+        'Gunakan Data API jika ada kunci, atau Explode'
+      ),
+      (
+        'Data API',
+        'Data API',
+        'Wajib YouTube Data API Key di constants.dart'
+      ),
+      (
+        'Explode',
+        'Explode',
+        'YouTube Explode Engine (Bebas kuota API)'
+      ),
+    ];
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF282828),
+        title: const Text('Mode Akses Katalog',
+            style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: modes.map((m) {
+            return RadioListTile<String>(
+              value: m.$1,
+              // ignore: deprecated_member_use
+              groupValue: currentMode,
+              title: Text(m.$2,
+                  style: const TextStyle(color: Colors.white, fontSize: 14)),
+              subtitle: Text(m.$3,
+                  style: const TextStyle(color: Colors.white38, fontSize: 12)),
+              activeColor: const Color(0xFF1DB954),
+              // ignore: deprecated_member_use
+              onChanged: (val) async {
+                if (val == null) return;
+                if (val == 'Data API' &&
+                    (YOUTUBE_API_KEY.isEmpty ||
+                        YOUTUBE_API_KEY == 'ISI_DI_SINI')) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                            'Peringatan: Kunci YouTube API belum dikonfigurasi di constants.dart.'),
+                        backgroundColor: Colors.orangeAccent,
+                      ),
+                    );
+                  }
+                }
+                if (Hive.isBoxOpen(BOX_SETTINGS)) {
+                  await Hive.box(BOX_SETTINGS).put('catalog_mode', val);
+                }
+                if (ctx.mounted) Navigator.pop(ctx);
+                setState(() {});
+              },
+            );
+          }).toList(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child:
+                const Text('Tutup', style: TextStyle(color: Colors.white54)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showStreamFormatDialog(BuildContext context) {
+    final box =
+        Hive.isBoxOpen(BOX_SETTINGS) ? Hive.box(BOX_SETTINGS) : null;
+    final currentFormat =
+        (box?.get('stream_format', defaultValue: 'Tertinggi') as String?) ??
+            'Tertinggi';
+
+    const formats = [
+      (
+        'Tertinggi',
+        'Tertinggi (Default)',
+        'Audio-only kualitas terbaik'
+      ),
+      (
+        'Seimbang',
+        'Seimbang',
+        'Audio-only ≤ 128 kbps (Hemat kuota & jernih)'
+      ),
+      (
+        'Hemat Data',
+        'Hemat Data',
+        'Audio-only bitrate terendah'
+      ),
+    ];
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF282828),
+        title: const Text('Format Stream',
+            style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: formats.map((f) {
+            return RadioListTile<String>(
+              value: f.$1,
+              // ignore: deprecated_member_use
+              groupValue: currentFormat,
+              title: Text(f.$2,
+                  style: const TextStyle(color: Colors.white, fontSize: 14)),
+              subtitle: Text(f.$3,
+                  style: const TextStyle(color: Colors.white38, fontSize: 12)),
+              activeColor: const Color(0xFF1DB954),
+              // ignore: deprecated_member_use
+              onChanged: (val) async {
+                if (val == null) return;
+                if (Hive.isBoxOpen(BOX_SETTINGS)) {
+                  await Hive.box(BOX_SETTINGS).put('stream_format', val);
+                }
+                if (ctx.mounted) Navigator.pop(ctx);
+                setState(() {});
+              },
+            );
+          }).toList(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child:
+                const Text('Tutup', style: TextStyle(color: Colors.white54)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getCatalogModeSubtitle(String mode) {
+    switch (mode) {
+      case 'Data API':
+        return 'Data API (YouTube Data API v3 aktif)';
+      case 'Explode':
+        return 'Explode (Bebas kuota API via Explode Engine)';
+      case 'Otomatis':
+      default:
+        return YOUTUBE_API_KEY != 'ISI_DI_SINI' && YOUTUBE_API_KEY.isNotEmpty
+            ? 'Otomatis (Kunci API aktif)'
+            : 'Otomatis (Explode Engine aktif)';
+    }
+  }
+
+  String _getStreamFormatSubtitle(String format) {
+    switch (format) {
+      case 'Hemat Data':
+        return 'Hemat Data (Bitrate terendah)';
+      case 'Seimbang':
+        return 'Seimbang (Audio-only ≤ 128 kbps)';
+      case 'Tertinggi':
+      default:
+        return 'Tertinggi (Audio-only kualitas terbaik)';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final playerState = ref.watch(playerControllerProvider);
     final cacheLimitMB = ref.watch(settingsControllerProvider);
+
+    final box =
+        Hive.isBoxOpen(BOX_SETTINGS) ? Hive.box(BOX_SETTINGS) : null;
+    final catalogMode =
+        (box?.get('catalog_mode', defaultValue: 'Otomatis') as String?) ??
+            'Otomatis';
+    final streamFormat =
+        (box?.get('stream_format', defaultValue: 'Tertinggi') as String?) ??
+            'Tertinggi';
 
     final isSleepTimerActive = playerState.sleepTimerEndTime != null ||
         playerState.sleepAfterCurrentTrack;
@@ -299,49 +493,45 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ? const Color(0xFF1DB954)
                   : Colors.white70,
             ),
-            title: const Text('Timer Tidur',
+            title: const Text('Atur Timer Tidur',
                 style: TextStyle(color: Colors.white)),
-            subtitle: Text(
-              sleepTimerStatus,
-              style: TextStyle(
-                color: isSleepTimerActive
-                    ? const Color(0xFF1DB954)
-                    : Colors.white38,
-                fontSize: 13,
-              ),
-            ),
+            subtitle: Text(sleepTimerStatus,
+                style: TextStyle(
+                  color: isSleepTimerActive
+                      ? const Color(0xFF1DB954)
+                      : Colors.white38,
+                  fontSize: 13,
+                )),
             trailing: const Icon(Icons.chevron_right, color: Colors.white38),
             onTap: () => showSleepTimerBottomSheet(context, ref),
           ),
 
           const Divider(color: Colors.white10),
 
-          // Section 2: Penyimpanan & Cache Offline (Fase 4)
+          // Section 2: Penyimpanan & Cache Offline
           _buildSectionHeader('PENYIMPANAN & CACHE OFFLINE'),
           ListTile(
-            leading:
-                const Icon(Icons.storage_outlined, color: Colors.white70),
-            title: const Text('Penggunaan Cache',
+            leading: const Icon(Icons.storage_outlined, color: Colors.white70),
+            title: const Text('Total Cache Musik',
                 style: TextStyle(color: Colors.white)),
             subtitle: Text(
               _isLoadingCache
                   ? 'Menghitung...'
-                  : '${_formatBytes(_cacheSizeBytes)} dari $cacheLimitMB MB batas maksimal',
+                  : _formatBytes(_cacheSizeBytes),
               style: const TextStyle(color: Colors.white38, fontSize: 13),
             ),
             trailing: IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.white54, size: 20),
-              onPressed: () {
-                setState(() => _isLoadingCache = true);
-                _loadCacheSize();
-              },
+              icon: const Icon(Icons.refresh, color: Colors.white38, size: 20),
+              tooltip: 'Perbarui ukuran cache',
+              onPressed: _loadCacheSize,
             ),
           ),
           ListTile(
             leading: const Icon(Icons.tune, color: Colors.white70),
             title: const Text('Batas Kapasitas Cache',
                 style: TextStyle(color: Colors.white)),
-            subtitle: Text('$cacheLimitMB MB (Otomatis hapus file terlama LRU)',
+            subtitle: Text(
+                '$cacheLimitMB MB (Otomatis hapus file terlama LRU)',
                 style: const TextStyle(color: Colors.white38, fontSize: 13)),
             trailing: const Icon(Icons.chevron_right, color: Colors.white38),
             onTap: () => _showChangeLimitDialog(context, cacheLimitMB),
@@ -365,31 +555,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             title: const Text('Mode Akses Katalog',
                 style: TextStyle(color: Colors.white)),
             subtitle: Text(
-              YOUTUBE_API_KEY != 'ISI_DI_SINI' && YOUTUBE_API_KEY.isNotEmpty
-                  ? 'YouTube Data API v3 (Kunci kustom aktif)'
-                  : 'YouTube Explode Engine (Bebas kuota API)',
+              _getCatalogModeSubtitle(catalogMode),
               style: const TextStyle(color: Colors.white38, fontSize: 13),
             ),
+            trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+            onTap: () => _showCatalogModeDialog(context),
           ),
           ListTile(
             leading: const Icon(Icons.bolt, color: Colors.white70),
             title: const Text('Format Stream',
                 style: TextStyle(color: Colors.white)),
-            subtitle: const Text(
-                'Audio-only kualitas tertinggi (Hemat kuota & baterai)',
-                style: TextStyle(color: Colors.white38, fontSize: 13)),
+            subtitle: Text(
+              _getStreamFormatSubtitle(streamFormat),
+              style: const TextStyle(color: Colors.white38, fontSize: 13),
+            ),
+            trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+            onTap: () => _showStreamFormatDialog(context),
           ),
 
           const Divider(color: Colors.white10),
 
           // Section 4: Tentang Aplikasi
           _buildSectionHeader('TENTANG SETEL'),
-          const ListTile(
-            leading: Icon(Icons.info_outline, color: Colors.white70),
-            title: Text('Versi Aplikasi',
+          ListTile(
+            leading: const Icon(Icons.info_outline, color: Colors.white70),
+            title: const Text('Versi Aplikasi',
                 style: TextStyle(color: Colors.white)),
-            subtitle: Text('1.1.10+12',
-                style: TextStyle(color: Colors.white38, fontSize: 13)),
+            subtitle: Text(_appVersion,
+                style: const TextStyle(color: Colors.white38, fontSize: 13)),
           ),
           ListTile(
             leading:

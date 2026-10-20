@@ -175,8 +175,7 @@ class CacheServiceImpl implements CacheService {
   @override
   Future<void> enforceLimit() async {
     try {
-      final settingsBox = Hive.box<Settings>(BOX_SETTINGS);
-      final settings = settingsBox.get(0) ?? const Settings();
+      Settings settings = const Settings(); if (Hive.isBoxOpen(BOX_SETTINGS)) { final settingsBox = Hive.box(BOX_SETTINGS); final raw = settingsBox.get(0); if (raw is Settings) settings = raw; }
       final limitBytes = settings.cacheLimitMB * 1024 * 1024;
 
       final cacheDir = await _getCacheDir();

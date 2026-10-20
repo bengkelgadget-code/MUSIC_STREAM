@@ -26,6 +26,9 @@ class DummyYouTubeService implements YouTubeService {
       );
 
   @override
+  Future<List<String>> getSuggestions(String query) async => [];
+
+  @override
   Future<Song> fetchMetadata(String videoId) async => const Song(
         videoId: 'm1',
         title: 'Title',
@@ -57,7 +60,7 @@ void main() {
     if (!Hive.isAdapterRegistered(4)) Hive.registerAdapter(SettingsAdapter());
 
     await Hive.openBox<Song>(BOX_SONGS);
-    await Hive.openBox<Settings>(BOX_SETTINGS);
+    await Hive.openBox(BOX_SETTINGS);
   });
 
   tearDownAll(() async {
@@ -111,7 +114,7 @@ void main() {
 
     test('LRU enforceLimit evicts oldest files when exceeding cache limit',
         () async {
-      final settingsBox = Hive.box<Settings>(BOX_SETTINGS);
+      final settingsBox = Hive.box(BOX_SETTINGS);
       // Set limit ke 1 MB (untuk testing)
       await settingsBox.put(0, const Settings(cacheLimitMB: 1));
 
@@ -161,7 +164,7 @@ void main() {
         'Setelah evict LRU dan clearCache, entry songsBox harus memiliki cachedPath == null',
         () async {
       final songsBox = Hive.box<Song>(BOX_SONGS);
-      final settingsBox = Hive.box<Settings>(BOX_SETTINGS);
+      final settingsBox = Hive.box(BOX_SETTINGS);
 
       // 1. Uji LRU eviction membersihkan cachedPath
       await settingsBox.put(0, const Settings(cacheLimitMB: 1));
