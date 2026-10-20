@@ -18,8 +18,12 @@ class DummyYouTubeService implements YouTubeService {
   Future<List<Song>> search(String query) async => [];
 
   @override
-  Future<Uri> resolveStreamUrl(String videoId) async =>
-      Uri.parse('https://example.com/audio.m4a');
+  Future<AudioStreamResult> resolveStreamUrl(String videoId,
+          {int clientStartIndex = 0}) async =>
+      AudioStreamResult(
+        url: Uri.parse('https://example.com/audio.m4a'),
+        headers: {'User-Agent': 'test'},
+      );
 
   @override
   Future<Song> fetchMetadata(String videoId) async => const Song(

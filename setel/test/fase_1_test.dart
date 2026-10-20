@@ -59,8 +59,12 @@ class TestYouTubeService implements YouTubeService {
   }
 
   @override
-  Future<Uri> resolveStreamUrl(String videoId) async {
-    return Uri.parse('https://example.com/stream.m4a');
+  Future<AudioStreamResult> resolveStreamUrl(String videoId,
+      {int clientStartIndex = 0}) async {
+    return AudioStreamResult(
+      url: Uri.parse('https://example.com/stream.m4a'),
+      headers: {'User-Agent': 'test'},
+    );
   }
 
   @override

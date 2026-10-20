@@ -19,14 +19,16 @@ import 'package:setel/services/youtube_service.dart';
 import 'package:setel/state/providers.dart';
 
 class ThrottledYouTubeService implements YouTubeService {
-  final Future<Uri> resolveFuture;
+  final Future<AudioStreamResult> resolveFuture;
   ThrottledYouTubeService(this.resolveFuture);
 
   @override
   Future<List<Song>> search(String query) async => [];
 
   @override
-  Future<Uri> resolveStreamUrl(String videoId) => resolveFuture;
+  Future<AudioStreamResult> resolveStreamUrl(String videoId,
+          {int clientStartIndex = 0}) =>
+      resolveFuture;
 
   @override
   Future<Song> fetchMetadata(String videoId) async => const Song(
@@ -263,7 +265,7 @@ void main() {
         'Uji Regresi FGS: AudioPlayerServiceImpl memanggil updatePlaybackState loading seketika SEBELUM resolveStreamUrl saat jaringan lambat/throttled dan aman saat mode pesawat/error',
         () async {
       final handler = SetelAudioHandler();
-      final completer = Completer<Uri>();
+      final completer = Completer<AudioStreamResult>();
 
       final throttledYt = ThrottledYouTubeService(completer.future);
       final playerService = AudioPlayerServiceImpl(

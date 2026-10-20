@@ -279,28 +279,43 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       } else {
         debugPrint(
             'Cache miss. Me-resolve stream YouTube audio-only untuk videoId: ${song.videoId}');
+        AudioStreamResult? firstStream;
         try {
-          final streamUri =
+          final stream =
               await _youTubeService.resolveStreamUrl(song.videoId);
-          await _player.setUrl(streamUri.toString());
+          firstStream = stream;
+          debugPrint(
+              'Percobaan pertama memutar stream (${stream.clientName}) ke just_audio');
+          await _player.setUrl(stream.url.toString(), headers: stream.headers);
 
           // Lakukan auto-cache di background saat stream dimuat (Fase 4)
           if (_cacheService != null) {
-            unawaited(_cacheService.cacheSong(song, streamUri).catchError((e) {
+            unawaited(_cacheService
+                .cacheSong(song, stream.url, headers: stream.headers)
+                .catchError((e) {
               debugPrint('Background auto-cache dilewati: $e');
               return File('');
             }));
           }
         } catch (firstError) {
+          final nextIndex = firstStream != null
+              ? (YouTubeServiceImpl.findClientIndex(firstStream.clientName) + 1) % 3
+              : 1;
           debugPrint(
-              'Percobaan pertama memuat stream gagal ($firstError). Mencoba resolve ulang 1x dengan URL segar...');
-          final freshStreamUri =
-              await _youTubeService.resolveStreamUrl(song.videoId);
-          await _player.setUrl(freshStreamUri.toString());
+              'Percobaan pertama memuat stream gagal ($firstError). Mencoba resolve ulang 1x dengan URL segar & fallback client index $nextIndex...');
+          final freshStream = await _youTubeService.resolveStreamUrl(
+            song.videoId,
+            clientStartIndex: nextIndex,
+          );
+          debugPrint(
+              'Percobaan kedua (retry) memutar stream (${freshStream.clientName}) ke just_audio');
+          await _player.setUrl(freshStream.url.toString(),
+              headers: freshStream.headers);
 
           if (_cacheService != null) {
-            unawaited(
-                _cacheService.cacheSong(song, freshStreamUri).catchError((e) {
+            unawaited(_cacheService
+                .cacheSong(song, freshStream.url, headers: freshStream.headers)
+                .catchError((e) {
               debugPrint('Background auto-cache dilewati: $e');
               return File('');
             }));

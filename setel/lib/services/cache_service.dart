@@ -14,7 +14,8 @@ abstract class CacheService {
   Future<File?> getCached(Song song);
 
   /// Download stream ke file lokal saat lagu diputar. Dipanggil otomatis oleh AudioPlayerService.
-  Future<File> cacheSong(Song song, Uri streamUrl);
+  Future<File> cacheSong(Song song, Uri streamUrl,
+      {Map<String, String>? headers});
 
   /// Hapus file terlama (LRU) jika total > batas. Dipanggil tiap selesai cacheSong.
   Future<void> enforceLimit();
@@ -77,7 +78,8 @@ class CacheServiceImpl implements CacheService {
   }
 
   @override
-  Future<File> cacheSong(Song song, Uri streamUrl) async {
+  Future<File> cacheSong(Song song, Uri streamUrl,
+      {Map<String, String>? headers}) async {
     final cacheDir = await _getCacheDir();
     final targetFile = File('${cacheDir.path}/${song.videoId}.m4a');
 
@@ -95,6 +97,9 @@ class CacheServiceImpl implements CacheService {
       await _dio.download(
         streamUrl.toString(),
         tempFile.path,
+        options: headers != null && headers.isNotEmpty
+            ? Options(headers: headers)
+            : null,
         deleteOnError: true,
       );
 
