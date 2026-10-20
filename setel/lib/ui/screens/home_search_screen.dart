@@ -202,6 +202,18 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
     return ListView(
       padding: const EdgeInsets.only(top: 16, bottom: 80),
       children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Text(
+            'Cari musik favoritmu di Setel',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ),
         _buildSectionHeader('Playlist Indo Terbaik 🇮🇩'),
         const SizedBox(height: 12),
         SizedBox(

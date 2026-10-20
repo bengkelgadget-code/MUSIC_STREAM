@@ -47,7 +47,7 @@ void main() {
 
   setUpAll(() async {
     PackageInfo.setMockInitialValues(
-      appName: 'Son Horek',
+      appName: 'Setel',
       packageName: 'com.bengkelgadget.setel',
       version: '1.1.1',
       buildNumber: '3',
