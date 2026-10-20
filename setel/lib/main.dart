@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
@@ -5,17 +7,34 @@ import 'data/hive_init.dart';
 import 'services/audio_handler.dart';
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  runZonedGuarded(() async {
+    WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Hive storage and register all model adapters
-  await HiveInit.init();
+    // Global Flutter error logging
+    FlutterError.onError = (FlutterErrorDetails details) {
+      FlutterError.presentError(details);
+      debugPrint(
+          'FlutterError caught: ${details.exceptionAsString()}\n${details.stack}');
+    };
 
-  // Initialize audio_service background handler
-  await initAudioService();
+    // Global asynchronous platform dispatcher error logging
+    PlatformDispatcher.instance.onError = (error, stack) {
+      debugPrint('PlatformDispatcher caught error: $error\n$stack');
+      return true;
+    };
 
-  runApp(
-    const ProviderScope(
-      child: SetelApp(),
-    ),
-  );
+    // Initialize Hive storage and register all model adapters
+    await HiveInit.init();
+
+    // Initialize audio_service background handler
+    await initAudioService();
+
+    runApp(
+      const ProviderScope(
+        child: SetelApp(),
+      ),
+    );
+  }, (error, stack) {
+    debugPrint('runZonedGuarded caught unhandled error: $error\n$stack');
+  });
 }

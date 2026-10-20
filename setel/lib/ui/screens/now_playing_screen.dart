@@ -20,6 +20,22 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<PlayerControllerState>(playerControllerProvider,
+        (previous, next) {
+      if (next.playbackError != null &&
+          next.playbackError != previous?.playbackError) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(next.playbackError!),
+            backgroundColor: Colors.redAccent.shade700,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        ref.read(playerControllerProvider.notifier).clearPlaybackError();
+      }
+    });
+
     final playerState = ref.watch(playerControllerProvider);
     final controller = ref.read(playerControllerProvider.notifier);
     final libraryState = ref.watch(libraryControllerProvider);

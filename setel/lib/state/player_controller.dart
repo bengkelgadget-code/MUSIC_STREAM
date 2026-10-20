@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/song.dart';
@@ -16,6 +17,7 @@ class PlayerControllerState {
   final RepeatMode repeatMode;
   final DateTime? sleepTimerEndTime;
   final bool sleepAfterCurrentTrack;
+  final String? playbackError;
 
   const PlayerControllerState({
     this.currentSong,
@@ -27,6 +29,7 @@ class PlayerControllerState {
     this.repeatMode = RepeatMode.off,
     this.sleepTimerEndTime,
     this.sleepAfterCurrentTrack = false,
+    this.playbackError,
   });
 
   PlayerControllerState copyWith({
@@ -40,6 +43,8 @@ class PlayerControllerState {
     DateTime? sleepTimerEndTime,
     bool? sleepAfterCurrentTrack,
     bool clearSleepTimer = false,
+    String? playbackError,
+    bool clearPlaybackError = false,
   }) {
     return PlayerControllerState(
       currentSong: currentSong ?? this.currentSong,
@@ -55,6 +60,9 @@ class PlayerControllerState {
       sleepAfterCurrentTrack: clearSleepTimer
           ? false
           : (sleepAfterCurrentTrack ?? this.sleepAfterCurrentTrack),
+      playbackError: clearPlaybackError
+          ? null
+          : (playbackError ?? this.playbackError),
     );
   }
 }
@@ -69,7 +77,7 @@ class PlayerController extends Notifier<PlayerControllerState> {
 
     _subscription?.cancel();
     _subscription = _audioPlayerService.playerState.listen((playerState) {
-      state = PlayerControllerState(
+      state = state.copyWith(
         currentSong: playerState.currentSong,
         isPlaying: playerState.isPlaying,
         position: playerState.position,
@@ -89,27 +97,104 @@ class PlayerController extends Notifier<PlayerControllerState> {
     return const PlayerControllerState();
   }
 
-  Future<void> playSong(Song song) => _audioPlayerService.playSong(song);
+  void clearPlaybackError() {
+    if (state.playbackError != null) {
+      state = state.copyWith(clearPlaybackError: true);
+    }
+  }
 
-  Future<void> playQueue(List<Song> songs, {int startIndex = 0}) =>
-      _audioPlayerService.playQueue(songs, startIndex: startIndex);
+  String _formatErrorMessage(Object error) {
+    final str = error.toString();
+    if (str.contains('403') || str.contains('Forbidden')) {
+      return 'Gagal memutar lagu: Akses stream YouTube dibatasi (403 Forbidden).';
+    } else if (str.contains('SocketException') ||
+        str.contains('Failed host lookup') ||
+        str.contains('ClientException')) {
+      return 'Gagal memutar lagu: Periksa koneksi internet Anda.';
+    } else if (str.contains('TimeoutException')) {
+      return 'Gagal memutar lagu: Waktu koneksi habis.';
+    }
+    return 'Gagal memutar lagu: Terjadi kesalahan pemutaran.';
+  }
 
-  Future<void> togglePlayPause() => _audioPlayerService.togglePlayPause();
+  Future<void> playSong(Song song) async {
+    try {
+      await _audioPlayerService.playSong(song);
+    } catch (e, st) {
+      debugPrint('PlayerController.playSong error: $e\n$st');
+      state = state.copyWith(playbackError: _formatErrorMessage(e));
+    }
+  }
 
-  Future<void> next() => _audioPlayerService.next();
+  Future<void> playQueue(List<Song> songs, {int startIndex = 0}) async {
+    try {
+      await _audioPlayerService.playQueue(songs, startIndex: startIndex);
+    } catch (e, st) {
+      debugPrint('PlayerController.playQueue error: $e\n$st');
+      state = state.copyWith(playbackError: _formatErrorMessage(e));
+    }
+  }
 
-  Future<void> previous() => _audioPlayerService.previous();
+  Future<void> togglePlayPause() async {
+    try {
+      await _audioPlayerService.togglePlayPause();
+    } catch (e, st) {
+      debugPrint('PlayerController.togglePlayPause error: $e\n$st');
+      state = state.copyWith(playbackError: _formatErrorMessage(e));
+    }
+  }
 
-  Future<void> seek(Duration position) => _audioPlayerService.seek(position);
+  Future<void> next() async {
+    try {
+      await _audioPlayerService.next();
+    } catch (e, st) {
+      debugPrint('PlayerController.next error: $e\n$st');
+      state = state.copyWith(playbackError: _formatErrorMessage(e));
+    }
+  }
 
-  Future<void> setShuffle(bool enabled) =>
-      _audioPlayerService.setShuffle(enabled);
+  Future<void> previous() async {
+    try {
+      await _audioPlayerService.previous();
+    } catch (e, st) {
+      debugPrint('PlayerController.previous error: $e\n$st');
+      state = state.copyWith(playbackError: _formatErrorMessage(e));
+    }
+  }
 
-  Future<void> setRepeatMode(RepeatMode mode) =>
-      _audioPlayerService.setRepeatMode(mode);
+  Future<void> seek(Duration position) async {
+    try {
+      await _audioPlayerService.seek(position);
+    } catch (e, st) {
+      debugPrint('PlayerController.seek error: $e\n$st');
+      state = state.copyWith(playbackError: _formatErrorMessage(e));
+    }
+  }
 
-  Future<void> addToQueueNext(Song song) =>
-      _audioPlayerService.addToQueueNext(song);
+  Future<void> setShuffle(bool enabled) async {
+    try {
+      await _audioPlayerService.setShuffle(enabled);
+    } catch (e, st) {
+      debugPrint('PlayerController.setShuffle error: $e\n$st');
+    }
+  }
+
+  Future<void> setRepeatMode(RepeatMode mode) async {
+    try {
+      await _audioPlayerService.setRepeatMode(mode);
+    } catch (e, st) {
+      debugPrint('PlayerController.setRepeatMode error: $e\n$st');
+    }
+  }
+
+  Future<void> addToQueueNext(Song song) async {
+    try {
+      await _audioPlayerService.addToQueueNext(song);
+    } catch (e, st) {
+      debugPrint('PlayerController.addToQueueNext error: $e\n$st');
+      state = state.copyWith(playbackError: _formatErrorMessage(e));
+    }
+  }
 
   void reorderQueue(int oldIndex, int newIndex) {
     final service = _audioPlayerService;

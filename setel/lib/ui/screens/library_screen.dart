@@ -3,8 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/playlist.dart';
 import '../../models/song.dart';
-import '../../state/library_controller.dart';
-import '../../state/player_controller.dart';
 import '../../state/providers.dart';
 import '../widgets/song_tile.dart';
 
@@ -172,6 +170,22 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<PlayerControllerState>(playerControllerProvider,
+        (previous, next) {
+      if (next.playbackError != null &&
+          next.playbackError != previous?.playbackError) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(next.playbackError!),
+            backgroundColor: Colors.redAccent.shade700,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        ref.read(playerControllerProvider.notifier).clearPlaybackError();
+      }
+    });
+
     final libraryState = ref.watch(libraryControllerProvider);
     final libraryController = ref.read(libraryControllerProvider.notifier);
     final playerState = ref.watch(playerControllerProvider);
@@ -553,6 +567,22 @@ class _PlaylistDetailScreenState
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<PlayerControllerState>(playerControllerProvider,
+        (previous, next) {
+      if (next.playbackError != null &&
+          next.playbackError != previous?.playbackError) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(next.playbackError!),
+            backgroundColor: Colors.redAccent.shade700,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        ref.read(playerControllerProvider.notifier).clearPlaybackError();
+      }
+    });
+
     final playerState = ref.watch(playerControllerProvider);
     final playerController = ref.read(playerControllerProvider.notifier);
     final libraryState = ref.watch(libraryControllerProvider);

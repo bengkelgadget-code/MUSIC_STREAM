@@ -12,6 +12,10 @@ import 'library_controller.dart';
 import 'player_controller.dart';
 import 'search_controller.dart';
 
+export 'library_controller.dart';
+export 'player_controller.dart';
+export 'search_controller.dart';
+
 // Services
 final youtubeServiceProvider = Provider<YouTubeService>((ref) {
   return YouTubeServiceImpl();

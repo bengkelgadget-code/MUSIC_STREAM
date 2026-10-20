@@ -179,23 +179,27 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   }
 
   Future<void> _handleTrackEnded() async {
-    // Cek jika sleep timer "Habis lagu ini" aktif
-    if (_sleepAfterCurrentTrack) {
-      await _player.pause();
-      cancelSleepTimer();
-      return;
-    }
+    try {
+      // Cek jika sleep timer "Habis lagu ini" aktif
+      if (_sleepAfterCurrentTrack) {
+        await _player.pause();
+        cancelSleepTimer();
+        return;
+      }
 
-    if (_repeatMode == RepeatMode.one) {
-      await seek(Duration.zero);
-      await _player.play();
-    } else if (_currentIndex < _queue.length - 1) {
-      await next();
-    } else if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
-      _currentIndex = 0;
-      await _playTrackAtCurrentIndex();
-    } else {
-      await _player.pause();
+      if (_repeatMode == RepeatMode.one) {
+        await seek(Duration.zero);
+        await _player.play();
+      } else if (_currentIndex < _queue.length - 1) {
+        await next();
+      } else if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
+        _currentIndex = 0;
+        await _playTrackAtCurrentIndex();
+      } else {
+        await _player.pause();
+      }
+    } catch (e) {
+      debugPrint('Error saat transisi akhir trek: $e');
     }
   }
 
@@ -263,16 +267,32 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       } else {
         debugPrint(
             'Cache miss. Me-resolve stream YouTube audio-only untuk videoId: ${song.videoId}');
-        final streamUri =
-            await _youTubeService.resolveStreamUrl(song.videoId);
-        await _player.setUrl(streamUri.toString());
+        try {
+          final streamUri =
+              await _youTubeService.resolveStreamUrl(song.videoId);
+          await _player.setUrl(streamUri.toString());
 
-        // Lakukan auto-cache di background saat stream dimuat (Fase 4)
-        if (_cacheService != null) {
-          unawaited(_cacheService.cacheSong(song, streamUri).catchError((e) {
-            debugPrint('Background auto-cache dilewati: $e');
-            return File('');
-          }));
+          // Lakukan auto-cache di background saat stream dimuat (Fase 4)
+          if (_cacheService != null) {
+            unawaited(_cacheService.cacheSong(song, streamUri).catchError((e) {
+              debugPrint('Background auto-cache dilewati: $e');
+              return File('');
+            }));
+          }
+        } catch (firstError) {
+          debugPrint(
+              'Percobaan pertama memuat stream gagal ($firstError). Mencoba resolve ulang 1x dengan URL segar...');
+          final freshStreamUri =
+              await _youTubeService.resolveStreamUrl(song.videoId);
+          await _player.setUrl(freshStreamUri.toString());
+
+          if (_cacheService != null) {
+            unawaited(
+                _cacheService.cacheSong(song, freshStreamUri).catchError((e) {
+              debugPrint('Background auto-cache dilewati: $e');
+              return File('');
+            }));
+          }
         }
       }
 
