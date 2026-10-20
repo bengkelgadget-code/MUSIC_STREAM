@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/discovery_categories.dart';
 import '../../models/song.dart';
 import '../../services/update_service.dart';
 import '../../state/providers.dart';
 import '../widgets/song_tile.dart';
+import 'discovery_playlist_screen.dart';
 
 class HomeSearchScreen extends ConsumerStatefulWidget {
   const HomeSearchScreen({super.key});
@@ -145,7 +147,8 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
             hintText: 'Nama Playlist',
             hintStyle: const TextStyle(color: Colors.white38),
             enabledBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
+              borderSide:
+                  BorderSide(color: Colors.white.withValues(alpha: 0.2)),
             ),
             focusedBorder: const UnderlineInputBorder(
               borderSide: BorderSide(color: Color(0xFF1DB954)),
@@ -191,6 +194,58 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
     );
   }
 
+  Widget _buildDiscoverySection() {
+    return ListView(
+      padding: const EdgeInsets.only(top: 16, bottom: 80),
+      children: [
+        _buildSectionHeader('Playlist Indo Terbaik 🇮🇩'),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 120,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: indoCategories.length,
+            separatorBuilder: (context, index) => const SizedBox(width: 12),
+            itemBuilder: (context, index) {
+              return _DiscoveryCategoryCard(category: indoCategories[index]);
+            },
+          ),
+        ),
+        const SizedBox(height: 28),
+        _buildSectionHeader('Playlist Manca Terbaik 🌍'),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 120,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: mancaCategories.length,
+            separatorBuilder: (context, index) => const SizedBox(width: 12),
+            itemBuilder: (context, index) {
+              return _DiscoveryCategoryCard(category: mancaCategories[index]);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+      child: Text(
+        title,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.2,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final searchState = ref.watch(searchControllerProvider);
@@ -221,8 +276,8 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
               prefixIcon: const Icon(Icons.search, color: Colors.white54),
               suffixIcon: _textController.text.isNotEmpty
                   ? IconButton(
-                      icon:
-                          const Icon(Icons.clear, color: Colors.white54, size: 20),
+                      icon: const Icon(Icons.clear,
+                          color: Colors.white54, size: 20),
                       onPressed: () {
                         setState(() {
                           _textController.clear();
@@ -237,6 +292,9 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
             ),
             onChanged: (text) {
               setState(() {});
+              if (text.isEmpty) {
+                ref.read(searchControllerProvider.notifier).clear();
+              }
             },
           ),
         ),
@@ -298,31 +356,12 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
             );
           }
 
+          // Saat pencarian kosong, tampilkan Discovery Categories
           if (searchState.results.isEmpty) {
-            return const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.music_note, size: 64, color: Colors.white24),
-                  SizedBox(height: 16),
-                  Text(
-                    'Cari musik favoritmu di Setel',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Jutaan lagu YouTube siap diputar tanpa batas',
-                    style: TextStyle(color: Colors.white38, fontSize: 13),
-                  ),
-                ],
-              ),
-            );
+            return _buildDiscoverySection();
           }
 
+          // Hasil Pencarian Aktif
           return ListView.separated(
             padding: const EdgeInsets.only(top: 8, bottom: 80),
             itemCount: searchState.results.length,
@@ -370,6 +409,80 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
             },
           );
         },
+      ),
+    );
+  }
+}
+
+class _DiscoveryCategoryCard extends StatelessWidget {
+  final DiscoveryCategory category;
+
+  const _DiscoveryCategoryCard({required this.category});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => DiscoveryPlaylistScreen(category: category),
+          ),
+        );
+      },
+      child: Container(
+        width: 150,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: category.gradientColors,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: category.gradientColors.first.withValues(alpha: 0.3),
+              blurRadius: 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              right: -8,
+              bottom: -8,
+              child: Icon(
+                category.icon,
+                size: 56,
+                color: Colors.white.withValues(alpha: 0.22),
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Icon(
+                  category.icon,
+                  size: 26,
+                  color: Colors.white,
+                ),
+                Text(
+                  category.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
