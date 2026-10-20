@@ -95,4 +95,25 @@ class PlayerController extends Notifier<PlayerControllerState> {
 
   Future<void> addToQueueNext(Song song) =>
       _audioPlayerService.addToQueueNext(song);
+
+  void reorderQueue(int oldIndex, int newIndex) {
+    final service = _audioPlayerService;
+    if (service is AudioPlayerServiceImpl) {
+      service.reorderQueue(oldIndex, newIndex);
+    }
+  }
+
+  void removeFromQueue(int index) {
+    final service = _audioPlayerService;
+    if (service is AudioPlayerServiceImpl) {
+      service.removeFromQueue(index);
+    }
+  }
+
+  void clearQueue() {
+    final service = _audioPlayerService;
+    if (service is AudioPlayerServiceImpl) {
+      service.clearQueue();
+    }
+  }
 }

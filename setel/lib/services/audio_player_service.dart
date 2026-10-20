@@ -151,7 +151,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       await next();
     } else if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
       _currentIndex = 0;
-      await playSong(_queue[0]);
+      await _playTrackAtCurrentIndex();
     } else {
       await _player.pause();
     }
@@ -162,17 +162,40 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
   @override
   Future<void> playSong(Song song) async {
-    // 1. Kelola Queue
-    if (!_queue.contains(song)) {
-      _queue = [song];
-      _currentIndex = 0;
-    } else {
-      _currentIndex = _queue.indexOf(song);
-    }
+    // Sesuai catatan auditor: playSong() me-reset antrean menjadi hanya [song]
+    _queue = [song];
+    _currentIndex = 0;
     _currentSong = song;
     _emitState();
 
-    // 2. Perbarui AudioService MediaItem
+    await _playTrackAtCurrentIndex();
+  }
+
+  @override
+  Future<void> playQueue(List<Song> songs, {int startIndex = 0}) async {
+    if (songs.isEmpty) return;
+
+    // Jika antrean yang dikirim sama persis (misal dari queue_sheet), cukup update index
+    if (!listEquals(_queue, songs)) {
+      _queue = List.from(songs);
+    }
+
+    _currentIndex = (startIndex >= 0 && startIndex < _queue.length)
+        ? startIndex
+        : 0;
+    _currentSong = _queue[_currentIndex];
+    _emitState();
+
+    await _playTrackAtCurrentIndex();
+  }
+
+  Future<void> _playTrackAtCurrentIndex() async {
+    if (_currentIndex < 0 || _currentIndex >= _queue.length) return;
+    final song = _queue[_currentIndex];
+    _currentSong = song;
+    _emitState();
+
+    // 1. Perbarui AudioService MediaItem
     _audioHandler.setMediaItemInfo(
       id: song.videoId,
       title: song.title,
@@ -183,13 +206,13 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           : null,
     );
 
-    // 3. Alur: resolveStreamUrl(videoId) → cek cache → just_audio.setUrl → play → recordPlay
+    // 2. Alur: resolveStreamUrl(videoId) → cek cache → just_audio.setUrl → play → recordPlay
     try {
       if (song.cachedPath != null && File(song.cachedPath!).existsSync()) {
-        debugPrint('Playing from local cache: ${song.cachedPath}');
+        debugPrint('Memutar dari cache lokal: ${song.cachedPath}');
         await _player.setFilePath(song.cachedPath!);
       } else {
-        debugPrint('Resolving YouTube stream for videoId: ${song.videoId}');
+        debugPrint('Me-resolve stream YouTube untuk videoId: ${song.videoId}');
         final streamUri =
             await _youTubeService.resolveStreamUrl(song.videoId);
         await _player.setUrl(streamUri.toString());
@@ -203,16 +226,6 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   }
 
   @override
-  Future<void> playQueue(List<Song> songs, {int startIndex = 0}) async {
-    if (songs.isEmpty) return;
-    _queue = List.from(songs);
-    _currentIndex = (startIndex >= 0 && startIndex < _queue.length)
-        ? startIndex
-        : 0;
-    await playSong(_queue[_currentIndex]);
-  }
-
-  @override
   Future<void> togglePlayPause() async {
     if (_player.playing) {
       await _player.pause();
@@ -220,7 +233,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       if (_currentSong != null) {
         await _player.play();
       } else if (_queue.isNotEmpty) {
-        await playSong(_queue[0]);
+        _currentIndex = 0;
+        await _playTrackAtCurrentIndex();
       }
     }
   }
@@ -249,7 +263,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       return;
     }
 
-    await playSong(_queue[_currentIndex]);
+    await _playTrackAtCurrentIndex();
   }
 
   @override
@@ -263,7 +277,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
     if (_currentIndex > 0) {
       _currentIndex--;
-      await playSong(_queue[_currentIndex]);
+      await _playTrackAtCurrentIndex();
     } else {
       await seek(Duration.zero);
     }
@@ -294,6 +308,65 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     } else {
       _queue.insert(_currentIndex + 1, song);
     }
+    _emitState();
+  }
+
+  // Helper manajemen antrean (Fase 2)
+  void reorderQueue(int oldIndex, int newIndex) {
+    if (oldIndex < 0 || oldIndex >= _queue.length) return;
+    if (newIndex < 0 || newIndex > _queue.length) return;
+
+    final song = _queue.removeAt(oldIndex);
+    if (newIndex > oldIndex) {
+      _queue.insert(newIndex - 1, song);
+    } else {
+      _queue.insert(newIndex, song);
+    }
+
+    // Koreksi index lagu yang sedang diputar
+    if (_currentIndex == oldIndex) {
+      _currentIndex = (newIndex > oldIndex) ? newIndex - 1 : newIndex;
+    } else if (oldIndex < _currentIndex && newIndex > _currentIndex) {
+      _currentIndex--;
+    } else if (oldIndex > _currentIndex && newIndex <= _currentIndex) {
+      _currentIndex++;
+    }
+
+    _emitState();
+  }
+
+  void removeFromQueue(int index) {
+    if (index < 0 || index >= _queue.length) return;
+
+    if (index == _currentIndex) {
+      if (_queue.length == 1) {
+        _player.pause();
+        _queue.clear();
+        _currentIndex = -1;
+        _currentSong = null;
+        _emitState();
+      } else {
+        final nextIdx =
+            (_currentIndex < _queue.length - 1) ? _currentIndex + 1 : 0;
+        final nextSong = _queue[nextIdx];
+        _queue.removeAt(index);
+        _currentIndex = _queue.indexOf(nextSong);
+        _playTrackAtCurrentIndex();
+      }
+    } else {
+      if (index < _currentIndex) {
+        _currentIndex--;
+      }
+      _queue.removeAt(index);
+      _emitState();
+    }
+  }
+
+  void clearQueue() {
+    _player.pause();
+    _queue.clear();
+    _currentIndex = -1;
+    _currentSong = null;
     _emitState();
   }
 

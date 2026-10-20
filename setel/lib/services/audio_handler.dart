@@ -78,6 +78,25 @@ class SetelAudioHandler extends BaseAudioHandler
   }
 
   @override
+  Future<void> click([MediaButton button = MediaButton.media]) async {
+    switch (button) {
+      case MediaButton.media:
+        if (playbackState.value.playing) {
+          await pause();
+        } else {
+          await play();
+        }
+        break;
+      case MediaButton.next:
+        await skipToNext();
+        break;
+      case MediaButton.previous:
+        await skipToPrevious();
+        break;
+    }
+  }
+
+  @override
   Future<void> play() async {
     onPlayCallback?.call();
   }
@@ -114,6 +133,7 @@ SetelAudioHandler get globalAudioHandler {
 
 Future<SetelAudioHandler> initAudioService() async {
   if (_globalAudioHandler != null) return _globalAudioHandler!;
+
   final handler = await AudioService.init(
     builder: () => SetelAudioHandler(),
     config: const AudioServiceConfig(
@@ -122,9 +142,11 @@ Future<SetelAudioHandler> initAudioService() async {
       androidNotificationOngoing: true,
       androidStopForegroundOnPause: true,
       androidNotificationIcon: 'mipmap/ic_launcher',
+      androidShowNotificationBadge: true,
     ),
   );
+
   _globalAudioHandler = handler;
-  debugPrint('AudioService initialized successfully: ${handler.runtimeType}');
+  debugPrint('AudioService initialized successfully.');
   return handler;
 }
