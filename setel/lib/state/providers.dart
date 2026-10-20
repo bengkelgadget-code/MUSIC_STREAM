@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../services/audio_handler.dart';
 import '../services/audio_player_service.dart';
 import '../services/cache_service.dart';
 import '../services/library_service.dart';
@@ -9,19 +10,28 @@ import 'search_controller.dart';
 
 // Services
 final youtubeServiceProvider = Provider<YouTubeService>((ref) {
-  throw UnimplementedError('YouTubeService not initialized yet');
+  return YouTubeServiceImpl();
 });
 
 final audioPlayerServiceProvider = Provider<AudioPlayerService>((ref) {
-  throw UnimplementedError('AudioPlayerService not initialized yet');
+  final ytService = ref.watch(youtubeServiceProvider);
+  final handler = globalAudioHandler;
+  final service = AudioPlayerServiceImpl(
+    youTubeService: ytService,
+    audioHandler: handler,
+  );
+  ref.onDispose(() {
+    service.dispose();
+  });
+  return service;
 });
 
 final libraryServiceProvider = Provider<LibraryService>((ref) {
-  throw UnimplementedError('LibraryService not initialized yet');
+  throw UnimplementedError('LibraryService will be implemented in Fase 3');
 });
 
 final cacheServiceProvider = Provider<CacheService>((ref) {
-  throw UnimplementedError('CacheService not initialized yet');
+  throw UnimplementedError('CacheService will be implemented in Fase 4');
 });
 
 // Controllers
