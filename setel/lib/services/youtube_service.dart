@@ -184,10 +184,22 @@ class YouTubeServiceImpl implements YouTubeService {
   static final List<({YoutubeApiClient client, String name, String userAgent})>
       streamClients = [
     (
+      client: YoutubeApiClient.androidSdkless,
+      name: 'androidSdkless',
+      userAgent:
+          'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
+    ),
+    (
       client: YoutubeApiClient.androidVr,
       name: 'androidVr',
       userAgent:
           'com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12; Quest 3)',
+    ),
+    (
+      client: YoutubeApiClient.android,
+      name: 'android',
+      userAgent:
+          'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
     ),
     (
       client: YoutubeApiClient.ios,

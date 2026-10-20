@@ -299,7 +299,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           }
         } catch (firstError) {
           final nextIndex = firstStream != null
-              ? (YouTubeServiceImpl.findClientIndex(firstStream.clientName) + 1) % 3
+              ? (YouTubeServiceImpl.findClientIndex(firstStream.clientName) + 1) %
+                  YouTubeServiceImpl.streamClients.length
               : 1;
           debugPrint(
               'Percobaan pertama memuat stream gagal ($firstError). Mencoba resolve ulang 1x dengan URL segar & fallback client index $nextIndex...');
