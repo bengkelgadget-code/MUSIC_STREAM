@@ -33,3 +33,11 @@
 **/android/app/debug/
 **/android/app/profile/
 **/android/app/release/
+
+# Keystore & Signing properties (Blocker: Never commit credentials to git)
+**/key.properties
+**/*.jks
+**/*.keystore
+key.properties
+*.jks
+*.keystore

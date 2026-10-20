@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'setel/pubspec.yaml'
+      - 'setel/android/**'
       - '.github/workflows/auto_release.yml'
   workflow_dispatch:
 
@@ -48,6 +49,21 @@ jobs:
           echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
           echo "VERSION_TAG=v$VERSION_NAME" >> $GITHUB_ENV
           echo "Mendeteksi versi: v$VERSION_NAME (Build $VERSION_CODE)"
+
+      - name: Setup Release Keystore & key.properties
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > setel/android/app/setel-release.jks
+            cat <<EOF > setel/android/key.properties
+storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+keyPassword=${{ secrets.KEY_PASSWORD }}
+keyAlias=${{ secrets.KEY_ALIAS }}
+storeFile=setel-release.jks
+EOF
+            echo "Keystore decoded to setel/android/app/setel-release.jks and key.properties created."
+          else
+            echo "::warning::KEYSTORE_BASE64 secret is not set, falling back to debug signing."
+          fi
 
       - name: Build APK
         working-directory: ./setel
