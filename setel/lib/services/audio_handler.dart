@@ -159,7 +159,7 @@ Future<SetelAudioHandler> initAudioService() async {
       androidNotificationChannelName: 'Setel Audio Playback',
       androidNotificationOngoing: true,
       androidStopForegroundOnPause: true,
-      androidNotificationIcon: 'mipmap/ic_launcher',
+      androidNotificationIcon: 'drawable/ic_stat_music',
       androidShowNotificationBadge: true,
     ),
   );

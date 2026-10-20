@@ -154,8 +154,22 @@ class YouTubeServiceImpl implements YouTubeService {
     // Pilih audio-only dengan bitrate tertinggi. JANGAN simpan hasilnya ke DB.
     final yt = YoutubeExplode();
     try {
-      final manifest = await yt.videos.streamsClient.getManifest(videoId);
-      final audioStream = manifest.audioOnly.withHighestBitrate();
+      final manifest = await yt.videos.streamsClient.getManifest(
+        videoId,
+        requireWatchPage: false,
+        ytClients: [
+          YoutubeApiClient.androidSdkless,
+          YoutubeApiClient.android,
+          YoutubeApiClient.ios,
+        ],
+      );
+      final audioStreams = manifest.audioOnly;
+      if (audioStreams.isEmpty) {
+        throw AppException(
+          'Tidak ada stream audio yang tersedia untuk video $videoId',
+        );
+      }
+      final audioStream = audioStreams.withHighestBitrate();
       return audioStream.url;
     } catch (e) {
       throw AppException(

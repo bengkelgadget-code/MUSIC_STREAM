@@ -111,6 +111,9 @@ class PlayerController extends Notifier<PlayerControllerState> {
         str.contains('Failed host lookup') ||
         str.contains('ClientException')) {
       return 'Gagal memutar lagu: Periksa koneksi internet Anda.';
+    } else if (str.contains('RequestLimitExceededException') ||
+        str.contains('rate limiting')) {
+      return 'Gagal memutar lagu: Batas permintaan YouTube tercapai. Coba beberapa saat lagi.';
     } else if (str.contains('TimeoutException')) {
       return 'Gagal memutar lagu: Waktu koneksi habis.';
     }

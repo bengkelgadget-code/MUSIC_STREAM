@@ -251,6 +251,16 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           : null,
     );
 
+    // Tandai buffering di audio handler agar status sinkron
+    _audioHandler.updatePlaybackState(
+      isPlaying: false,
+      position: Duration.zero,
+      duration: song.durationMs > 0
+          ? Duration(milliseconds: song.durationMs)
+          : Duration.zero,
+      isBuffering: true,
+    );
+
     // 2. Alur: resolveStreamUrl(videoId) → cek cache → just_audio.setUrl → play → recordPlay
     try {
       File? cachedFile;
@@ -299,6 +309,12 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       await _player.play();
       await _recordPlay(song);
     } catch (e) {
+      _audioHandler.updatePlaybackState(
+        isPlaying: false,
+        position: Duration.zero,
+        duration: Duration.zero,
+        isBuffering: false,
+      );
       throw AppException('Gagal memutar lagu: $e', e);
     }
   }
