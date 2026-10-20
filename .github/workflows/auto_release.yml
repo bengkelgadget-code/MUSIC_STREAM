@@ -54,12 +54,12 @@ jobs:
         run: |
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > setel/android/app/setel-release.jks
-            cat <<EOF > setel/android/key.properties
-storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-keyPassword=${{ secrets.KEY_PASSWORD }}
-keyAlias=${{ secrets.KEY_ALIAS }}
-storeFile=setel-release.jks
-EOF
+            {
+              echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}"
+              echo "keyPassword=${{ secrets.KEY_PASSWORD }}"
+              echo "keyAlias=${{ secrets.KEY_ALIAS }}"
+              echo "storeFile=setel-release.jks"
+            } > setel/android/key.properties
             echo "Keystore decoded to setel/android/app/setel-release.jks and key.properties created."
           else
             echo "::warning::KEYSTORE_BASE64 secret is not set, falling back to debug signing."
@@ -85,15 +85,15 @@ EOF
 
       - name: Update version.json
         run: |
-          cat <<EOF > version.json
           {
-            "version_code": ${{ env.VERSION_CODE }},
-            "version_name": "${{ env.VERSION_NAME }}",
-            "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION_TAG }}/Setel.apk",
-            "changelog": "Pembaruan otomatis dari GitHub Actions versi ${{ env.VERSION_TAG }}.",
-            "force_update": false
-          }
-          EOF
+            echo "{"
+            echo "  \"version_code\": ${{ env.VERSION_CODE }},"
+            echo "  \"version_name\": \"${{ env.VERSION_NAME }}\","
+            echo "  \"download_url\": \"https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION_TAG }}/Setel.apk\","
+            echo "  \"changelog\": \"Pembaruan otomatis dari GitHub Actions versi ${{ env.VERSION_TAG }}.\","
+            echo "  \"force_update\": false"
+            echo "}"
+          } > version.json
           cp version.json setel/version.json
 
       - name: Commit version.json back to repository
