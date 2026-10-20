@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/song.dart';
 import '../../state/providers.dart';
 import '../widgets/song_tile.dart';
 
@@ -28,11 +29,150 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
     }
   }
 
+  void _showAddToPlaylistDialog(BuildContext context, Song song) {
+    final libraryState = ref.read(libraryControllerProvider);
+    final libraryController = ref.read(libraryControllerProvider.notifier);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF282828),
+        title: const Text('Tambah ke Playlist',
+            style: TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.add, color: Color(0xFF1DB954)),
+                title: const Text('Buat Playlist Baru',
+                    style: TextStyle(color: Color(0xFF1DB954))),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showCreatePlaylistDialog(context, songToAdd: song);
+                },
+              ),
+              const Divider(color: Colors.white10),
+              if (libraryState.playlists.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8.0),
+                  child: Text('Belum ada playlist',
+                      style: TextStyle(color: Colors.white38)),
+                )
+              else
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: libraryState.playlists.length,
+                    itemBuilder: (context, idx) {
+                      final pl = libraryState.playlists[idx];
+                      return ListTile(
+                        leading: const Icon(Icons.playlist_play,
+                            color: Colors.white70),
+                        title: Text(pl.name,
+                            style: const TextStyle(color: Colors.white)),
+                        subtitle: Text('${pl.songIds.length} lagu',
+                            style: const TextStyle(
+                                color: Colors.white38, fontSize: 12)),
+                        onTap: () async {
+                          await libraryController.addToPlaylist(pl.id, song);
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Ditambahkan ke "${pl.name}"'),
+                                backgroundColor: const Color(0xFF282828),
+                              ),
+                            );
+                          }
+                        },
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child:
+                const Text('Batal', style: TextStyle(color: Colors.white54)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCreatePlaylistDialog(BuildContext context, {Song? songToAdd}) {
+    final textController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF282828),
+        title: const Text('Playlist Baru',
+            style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: textController,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'Nama playlist...',
+            hintStyle: TextStyle(color: Colors.white38),
+            enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.white24)),
+            focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF1DB954))),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child:
+                const Text('Batal', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1DB954),
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () async {
+              final name = textController.text.trim();
+              if (name.isNotEmpty) {
+                final pl = await ref
+                    .read(libraryControllerProvider.notifier)
+                    .createPlaylist(name);
+                if (songToAdd != null) {
+                  await ref
+                      .read(libraryControllerProvider.notifier)
+                      .addToPlaylist(pl.id, songToAdd);
+                }
+                if (ctx.mounted) Navigator.pop(ctx);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Playlist "$name" berhasil dibuat'),
+                      backgroundColor: const Color(0xFF282828),
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final searchState = ref.watch(searchControllerProvider);
     final playerState = ref.watch(playerControllerProvider);
     final playerController = ref.read(playerControllerProvider.notifier);
+    final libraryState = ref.watch(libraryControllerProvider);
+    final libraryController = ref.read(libraryControllerProvider.notifier);
 
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
@@ -178,16 +318,22 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
               final isCurrent =
                   playerState.currentSong?.videoId == song.videoId;
               final isPlaying = isCurrent && playerState.isPlaying;
+              final isFavorite =
+                  libraryState.favoriteIds.contains(song.videoId);
 
               return SongTile(
                 song: song,
                 isCurrent: isCurrent,
                 isPlaying: isPlaying,
+                isFavorite: isFavorite,
                 onTap: () {
                   playerController.playQueue(
                     searchState.results,
                     startIndex: index,
                   );
+                },
+                onToggleFavorite: () {
+                  libraryController.toggleFavorite(song);
                 },
                 onPlayNext: () {
                   playerController.addToQueueNext(song);
@@ -198,6 +344,9 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                       backgroundColor: const Color(0xFF282828),
                     ),
                   );
+                },
+                onAddToPlaylist: () {
+                  _showAddToPlaylistDialog(context, song);
                 },
               );
             },

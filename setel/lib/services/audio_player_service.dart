@@ -11,6 +11,7 @@ import '../core/errors.dart';
 import '../models/history_entry.dart';
 import '../models/song.dart';
 import 'audio_handler.dart';
+import 'library_service.dart';
 import 'youtube_service.dart';
 
 enum RepeatMode { off, one, all }
@@ -75,6 +76,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   final AudioPlayer _player;
   final YouTubeService _youTubeService;
   final SetelAudioHandler _audioHandler;
+  final LibraryService? _libraryService;
 
   final StreamController<PlayerState> _stateController =
       StreamController<PlayerState>.broadcast();
@@ -89,9 +91,11 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     AudioPlayer? player,
     required YouTubeService youTubeService,
     required SetelAudioHandler audioHandler,
+    LibraryService? libraryService,
   })  : _player = player ?? AudioPlayer(),
         _youTubeService = youTubeService,
-        _audioHandler = audioHandler {
+        _audioHandler = audioHandler,
+        _libraryService = libraryService {
     _initListeners();
     _connectAudioHandler();
   }
@@ -372,17 +376,21 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
   Future<void> _recordPlay(Song song) async {
     try {
-      final historyBox = Hive.box<HistoryEntry>(BOX_HISTORY);
-      await historyBox.add(
-        HistoryEntry(
-          videoId: song.videoId,
-          playedAt: DateTime.now(),
-        ),
-      );
+      if (_libraryService != null) {
+        await _libraryService.recordPlay(song);
+      } else {
+        final historyBox = Hive.box<HistoryEntry>(BOX_HISTORY);
+        await historyBox.add(
+          HistoryEntry(
+            videoId: song.videoId,
+            playedAt: DateTime.now(),
+          ),
+        );
 
-      // FIFO maks 50 entri sesuai §4.3
-      while (historyBox.length > MAX_HISTORY_ENTRIES) {
-        await historyBox.deleteAt(0);
+        // FIFO maks 50 entri sesuai §4.3
+        while (historyBox.length > MAX_HISTORY_ENTRIES) {
+          await historyBox.deleteAt(0);
+        }
       }
     } catch (e) {
       debugPrint('Gagal mencatat riwayat pemutaran: $e');

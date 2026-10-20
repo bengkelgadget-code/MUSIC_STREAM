@@ -8,16 +8,22 @@ class SongTile extends StatelessWidget {
   final Song song;
   final bool isCurrent;
   final bool isPlaying;
+  final bool isFavorite;
   final VoidCallback? onTap;
   final VoidCallback? onPlayNext;
+  final VoidCallback? onToggleFavorite;
+  final VoidCallback? onAddToPlaylist;
 
   const SongTile({
     super.key,
     required this.song,
     this.isCurrent = false,
     this.isPlaying = false,
+    this.isFavorite = false,
     this.onTap,
     this.onPlayNext,
+    this.onToggleFavorite,
+    this.onAddToPlaylist,
   });
 
   @override
@@ -97,13 +103,56 @@ class SongTile extends StatelessWidget {
           ],
         ],
       ),
-      trailing: onPlayNext != null
-          ? IconButton(
-              icon: const Icon(Icons.playlist_play, color: Colors.white70),
-              tooltip: 'Putar Berikutnya',
-              onPressed: onPlayNext,
-            )
-          : null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (onToggleFavorite != null)
+            IconButton(
+              icon: Icon(
+                isFavorite ? Icons.favorite : Icons.favorite_border,
+                color: isFavorite ? Colors.redAccent : Colors.white38,
+                size: 20,
+              ),
+              tooltip: isFavorite ? 'Hapus dari Favorit' : 'Tambah ke Favorit',
+              onPressed: onToggleFavorite,
+            ),
+          if (onPlayNext != null || onAddToPlaylist != null)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: Colors.white54, size: 20),
+              color: const Color(0xFF282828),
+              onSelected: (val) {
+                if (val == 'play_next') onPlayNext?.call();
+                if (val == 'add_playlist') onAddToPlaylist?.call();
+              },
+              itemBuilder: (context) => [
+                if (onPlayNext != null)
+                  const PopupMenuItem(
+                    value: 'play_next',
+                    child: Row(
+                      children: [
+                        Icon(Icons.playlist_play, color: Colors.white70, size: 20),
+                        SizedBox(width: 10),
+                        Text('Putar Berikutnya',
+                            style: TextStyle(color: Colors.white)),
+                      ],
+                    ),
+                  ),
+                if (onAddToPlaylist != null)
+                  const PopupMenuItem(
+                    value: 'add_playlist',
+                    child: Row(
+                      children: [
+                        Icon(Icons.playlist_add, color: Colors.white70, size: 20),
+                        SizedBox(width: 10),
+                        Text('Tambah ke Playlist',
+                            style: TextStyle(color: Colors.white)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      ),
       onTap: onTap,
     );
   }

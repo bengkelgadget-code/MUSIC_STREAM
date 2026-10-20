@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../services/audio_handler.dart';
 import '../services/audio_player_service.dart';
 import '../services/cache_service.dart';
@@ -13,21 +14,23 @@ final youtubeServiceProvider = Provider<YouTubeService>((ref) {
   return YouTubeServiceImpl();
 });
 
+final libraryServiceProvider = Provider<LibraryService>((ref) {
+  return LibraryServiceImpl();
+});
+
 final audioPlayerServiceProvider = Provider<AudioPlayerService>((ref) {
   final ytService = ref.watch(youtubeServiceProvider);
+  final libService = ref.watch(libraryServiceProvider);
   final handler = globalAudioHandler;
   final service = AudioPlayerServiceImpl(
     youTubeService: ytService,
     audioHandler: handler,
+    libraryService: libService,
   );
   ref.onDispose(() {
     service.dispose();
   });
   return service;
-});
-
-final libraryServiceProvider = Provider<LibraryService>((ref) {
-  throw UnimplementedError('LibraryService will be implemented in Fase 3');
 });
 
 final cacheServiceProvider = Provider<CacheService>((ref) {

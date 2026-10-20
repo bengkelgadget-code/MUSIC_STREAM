@@ -21,6 +21,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
   Widget build(BuildContext context) {
     final playerState = ref.watch(playerControllerProvider);
     final controller = ref.read(playerControllerProvider.notifier);
+    final libraryState = ref.watch(libraryControllerProvider);
+    final libraryController = ref.read(libraryControllerProvider.notifier);
     final song = playerState.currentSong;
 
     if (song == null) {
@@ -33,14 +35,13 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
 
     final duration = playerState.duration;
     final position = playerState.position;
+    final isFavorite = libraryState.favoriteIds.contains(song.videoId);
 
     // Hitung posisi slider (dalam detik)
     final totalSeconds = duration.inSeconds.toDouble();
     final currentSeconds = _dragPosition ??
         (totalSeconds > 0
-            ? position.inSeconds
-                .toDouble()
-                .clamp(0.0, totalSeconds)
+            ? position.inSeconds.toDouble().clamp(0.0, totalSeconds)
             : 0.0);
 
     return Scaffold(
@@ -121,34 +122,50 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
 
               const Spacer(),
 
-              // Song Info
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      song.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
+              // Song Info & Favorite Toggle
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          song.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          song.artist,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            color: Colors.white60,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      song.artist,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        color: Colors.white60,
-                      ),
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      isFavorite ? Icons.favorite : Icons.favorite_border,
+                      color: isFavorite ? Colors.redAccent : Colors.white60,
                     ),
-                  ],
-                ),
+                    iconSize: 28,
+                    tooltip: isFavorite
+                        ? 'Hapus dari Favorit'
+                        : 'Tambah ke Favorit',
+                    onPressed: () {
+                      libraryController.toggleFavorite(song);
+                    },
+                  ),
+                ],
               ),
 
               const SizedBox(height: 16),
