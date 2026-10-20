@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/errors.dart';
 import '../models/song.dart';
 import '../services/audio_player_service.dart';
 import 'providers.dart';
@@ -119,7 +120,10 @@ class PlayerController extends Notifier<PlayerControllerState> {
     } else if (str.contains('bot') || str.contains('Sign in to confirm')) {
       return 'Gagal memutar lagu: Dibatasi verifikasi bot YouTube.';
     }
-    return 'Gagal memutar lagu: Terjadi kesalahan pemutaran.';
+    final detail = (error is AppException)
+        ? error.message.replaceFirst(RegExp(r'^Gagal memutar lagu:\s*'), '')
+        : str.replaceFirst(RegExp(r'^Exception:\s*'), '');
+    return 'Gagal memutar lagu: Terjadi kesalahan pemutaran ($detail).';
   }
 
   Future<void> playSong(Song song) async {

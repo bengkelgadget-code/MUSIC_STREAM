@@ -13,6 +13,7 @@ import '../models/song.dart';
 import 'audio_handler.dart';
 import 'cache_service.dart';
 import 'library_service.dart';
+import 'youtube_audio_source.dart';
 import 'youtube_service.dart';
 
 enum RepeatMode { off, one, all }
@@ -285,8 +286,15 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
               await _youTubeService.resolveStreamUrl(song.videoId);
           firstStream = stream;
           debugPrint(
-              'Percobaan pertama memutar stream (${stream.clientName}) ke just_audio');
-          await _player.setUrl(stream.url.toString(), headers: stream.headers);
+              'Percobaan pertama memutar stream (${stream.clientName}) ke just_audio via YouTubeAudioSource');
+          final audioSource = YouTubeAudioSource(
+            uri: stream.url,
+            headers: stream.headers,
+            totalBytes: stream.totalBytes,
+            contentType: stream.contentType,
+            tag: song,
+          );
+          await _player.setAudioSource(audioSource);
 
           // Lakukan auto-cache di background saat stream dimuat (Fase 4)
           if (_cacheService != null) {
@@ -309,9 +317,15 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
             clientStartIndex: nextIndex,
           );
           debugPrint(
-              'Percobaan kedua (retry) memutar stream (${freshStream.clientName}) ke just_audio');
-          await _player.setUrl(freshStream.url.toString(),
-              headers: freshStream.headers);
+              'Percobaan kedua (retry) memutar stream (${freshStream.clientName}) ke just_audio via YouTubeAudioSource');
+          final audioSource = YouTubeAudioSource(
+            uri: freshStream.url,
+            headers: freshStream.headers,
+            totalBytes: freshStream.totalBytes,
+            contentType: freshStream.contentType,
+            tag: song,
+          );
+          await _player.setAudioSource(audioSource);
 
           if (_cacheService != null) {
             unawaited(_cacheService

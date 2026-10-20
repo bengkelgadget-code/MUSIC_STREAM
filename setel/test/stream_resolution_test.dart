@@ -36,18 +36,22 @@ void main() {
       expect(YouTubeServiceImpl.findClientIndex('unknown'), -1);
     });
 
-    test('AudioStreamResult stores url and User-Agent headers correctly', () {
+    test('AudioStreamResult stores url, headers, totalBytes, and contentType correctly', () {
       final uri = Uri.parse('https://googlevideo.com/videoplayback?itag=251');
       const ua = 'com.google.android.youtube/20.10.38';
       final result = AudioStreamResult(
         url: uri,
         headers: {'User-Agent': ua},
         clientName: 'androidSdkless',
+        totalBytes: 5242880,
+        contentType: 'audio/webm',
       );
 
       expect(result.url, uri);
       expect(result.headers['User-Agent'], ua);
       expect(result.clientName, 'androidSdkless');
+      expect(result.totalBytes, 5242880);
+      expect(result.contentType, 'audio/webm');
     });
   });
 }

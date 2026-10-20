@@ -25,12 +25,10 @@ abstract class CacheService {
 }
 
 class CacheServiceImpl implements CacheService {
-  final Dio _dio;
   Directory? _cacheDirectory;
 
   CacheServiceImpl({Dio? dio, Directory? cacheDirectory})
-      : _dio = dio ?? Dio(),
-        _cacheDirectory = cacheDirectory;
+      : _cacheDirectory = cacheDirectory;
 
   Future<Directory> _getCacheDir() async {
     if (_cacheDirectory != null) return _cacheDirectory!;
@@ -92,16 +90,54 @@ class CacheServiceImpl implements CacheService {
     }
 
     // Download stream audio ke temporary file lalu rename (atomic)
+    // Gunakan HttpClient dengan Range terbatas (<= 256KB) untuk mencegah 403 Forbidden dari YouTube CDN
     final tempFile = File('${cacheDir.path}/${song.videoId}.tmp');
     try {
-      await _dio.download(
-        streamUrl.toString(),
-        tempFile.path,
-        options: headers != null && headers.isNotEmpty
-            ? Options(headers: headers)
-            : null,
-        deleteOnError: true,
-      );
+      final client = HttpClient();
+      final sink = tempFile.openWrite();
+      const chunkSize = 256 * 1024;
+      var current = 0;
+      int? totalLength;
+
+      try {
+        while (true) {
+          final to = current + chunkSize - 1;
+          final req = await client.getUrl(streamUrl);
+          headers?.forEach((k, v) => req.headers.set(k, v));
+          req.headers.set('Range', 'bytes=$current-$to');
+          final resp = await req.close();
+
+          if (resp.statusCode != 206 && resp.statusCode != 200) {
+            throw HttpException(
+                'Gagal download chunk cache: status ${resp.statusCode}');
+          }
+
+          if (totalLength == null) {
+            final contentRange = resp.headers.value('content-range');
+            if (contentRange != null && contentRange.contains('/')) {
+              totalLength = int.tryParse(contentRange.split('/').last.trim());
+            }
+          }
+
+          int chunkBytes = 0;
+          await for (final data in resp) {
+            sink.add(data);
+            chunkBytes += data.length;
+          }
+          current += chunkBytes;
+
+          if (totalLength != null && current >= totalLength) {
+            break;
+          }
+          if (chunkBytes < chunkSize) {
+            break;
+          }
+        }
+      } finally {
+        await sink.flush();
+        await sink.close();
+        client.close();
+      }
 
       if (await tempFile.exists() && await tempFile.length() > 0) {
         if (await targetFile.exists()) {

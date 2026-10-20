@@ -388,7 +388,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             leading: Icon(Icons.info_outline, color: Colors.white70),
             title: Text('Versi Aplikasi',
                 style: TextStyle(color: Colors.white)),
-            subtitle: Text('1.1.9+11',
+            subtitle: Text('1.1.10+12',
                 style: TextStyle(color: Colors.white38, fontSize: 13)),
           ),
           ListTile(

@@ -12,16 +12,20 @@ class AudioStreamResult {
   final Uri url;
   final Map<String, String> headers;
   final String clientName;
+  final int totalBytes;
+  final String contentType;
 
   const AudioStreamResult({
     required this.url,
     required this.headers,
     this.clientName = '',
+    this.totalBytes = 0,
+    this.contentType = 'audio/mp4',
   });
 
   @override
   String toString() =>
-      'AudioStreamResult(client: $clientName, url: $url, headers: $headers)';
+      'AudioStreamResult(client: $clientName, url: $url, totalBytes: $totalBytes, contentType: $contentType, headers: $headers)';
 
   @override
   bool operator ==(Object other) =>
@@ -247,24 +251,20 @@ class YouTubeServiceImpl implements YouTubeService {
           requireWatchPage: false,
           ytClients: [candidate.client],
         );
-        // Sesuai BUILD SPEC §4: "Pilih muxed/audio-only dengan bitrate tertinggi".
-        // Stream muxed (misal itag 18 MP4) memiliki ratebypass=yes dan progressive audio AAC
-        // yang dapat di-stream langsung tanpa diblokir limit chunk 256KB/403 oleh YouTube CDN.
-        StreamInfo? selectedStream;
-        if (manifest.muxed.isNotEmpty) {
-          selectedStream = manifest.muxed.withHighestBitrate();
-        } else if (manifest.audioOnly.isNotEmpty) {
-          selectedStream = manifest.audioOnly.withHighestBitrate();
-        }
-
-        if (selectedStream != null) {
+        final audioStreams = manifest.audioOnly;
+        if (audioStreams.isNotEmpty) {
+          final audioStream = audioStreams.withHighestBitrate();
+          final contentType =
+              audioStream.container.name == 'webm' ? 'audio/webm' : 'audio/mp4';
           debugPrint(
               'Berhasil me-resolve stream audio untuk videoId: $videoId '
-              'menggunakan ${candidate.name} (${selectedStream.container.name}, tag: ${selectedStream.tag}, ${selectedStream.bitrate.kiloBitsPerSecond} kbps)');
+              'menggunakan ${candidate.name} (${audioStream.container.name}, tag: ${audioStream.tag}, ${audioStream.bitrate.kiloBitsPerSecond} kbps, ${audioStream.size.totalBytes} bytes)');
           return AudioStreamResult(
-            url: selectedStream.url,
+            url: audioStream.url,
             headers: {'User-Agent': candidate.userAgent},
             clientName: candidate.name,
+            totalBytes: audioStream.size.totalBytes,
+            contentType: contentType,
           );
         }
       } catch (e) {
