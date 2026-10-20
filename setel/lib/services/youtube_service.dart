@@ -247,14 +247,22 @@ class YouTubeServiceImpl implements YouTubeService {
           requireWatchPage: false,
           ytClients: [candidate.client],
         );
-        final audioStreams = manifest.audioOnly;
-        if (audioStreams.isNotEmpty) {
-          final audioStream = audioStreams.withHighestBitrate();
+        // Sesuai BUILD SPEC §4: "Pilih muxed/audio-only dengan bitrate tertinggi".
+        // Stream muxed (misal itag 18 MP4) memiliki ratebypass=yes dan progressive audio AAC
+        // yang dapat di-stream langsung tanpa diblokir limit chunk 256KB/403 oleh YouTube CDN.
+        StreamInfo? selectedStream;
+        if (manifest.muxed.isNotEmpty) {
+          selectedStream = manifest.muxed.withHighestBitrate();
+        } else if (manifest.audioOnly.isNotEmpty) {
+          selectedStream = manifest.audioOnly.withHighestBitrate();
+        }
+
+        if (selectedStream != null) {
           debugPrint(
               'Berhasil me-resolve stream audio untuk videoId: $videoId '
-              'menggunakan ${candidate.name} (${audioStream.container.name}, ${audioStream.bitrate.kiloBitsPerSecond} kbps)');
+              'menggunakan ${candidate.name} (${selectedStream.container.name}, tag: ${selectedStream.tag}, ${selectedStream.bitrate.kiloBitsPerSecond} kbps)');
           return AudioStreamResult(
-            url: audioStream.url,
+            url: selectedStream.url,
             headers: {'User-Agent': candidate.userAgent},
             clientName: candidate.name,
           );

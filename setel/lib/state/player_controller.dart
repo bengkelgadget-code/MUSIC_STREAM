@@ -116,6 +116,8 @@ class PlayerController extends Notifier<PlayerControllerState> {
       return 'Gagal memutar lagu: Batas permintaan YouTube tercapai. Coba beberapa saat lagi.';
     } else if (str.contains('TimeoutException')) {
       return 'Gagal memutar lagu: Waktu koneksi habis.';
+    } else if (str.contains('bot') || str.contains('Sign in to confirm')) {
+      return 'Gagal memutar lagu: Dibatasi verifikasi bot YouTube.';
     }
     return 'Gagal memutar lagu: Terjadi kesalahan pemutaran.';
   }
