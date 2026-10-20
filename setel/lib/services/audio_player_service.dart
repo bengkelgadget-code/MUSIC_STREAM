@@ -11,6 +11,7 @@ import '../core/errors.dart';
 import '../models/history_entry.dart';
 import '../models/song.dart';
 import 'audio_handler.dart';
+import 'cache_service.dart';
 import 'library_service.dart';
 import 'youtube_service.dart';
 
@@ -24,6 +25,8 @@ class PlayerState {
   final List<Song> queue;
   final bool shuffle;
   final RepeatMode repeatMode;
+  final DateTime? sleepTimerEndTime;
+  final bool sleepAfterCurrentTrack;
 
   const PlayerState({
     this.isPlaying = false,
@@ -33,6 +36,8 @@ class PlayerState {
     this.queue = const [],
     this.shuffle = false,
     this.repeatMode = RepeatMode.off,
+    this.sleepTimerEndTime,
+    this.sleepAfterCurrentTrack = false,
   });
 
   PlayerState copyWith({
@@ -43,6 +48,9 @@ class PlayerState {
     List<Song>? queue,
     bool? shuffle,
     RepeatMode? repeatMode,
+    DateTime? sleepTimerEndTime,
+    bool? sleepAfterCurrentTrack,
+    bool clearSleepTimer = false,
   }) {
     return PlayerState(
       isPlaying: isPlaying ?? this.isPlaying,
@@ -52,6 +60,12 @@ class PlayerState {
       queue: queue ?? this.queue,
       shuffle: shuffle ?? this.shuffle,
       repeatMode: repeatMode ?? this.repeatMode,
+      sleepTimerEndTime: clearSleepTimer
+          ? null
+          : (sleepTimerEndTime ?? this.sleepTimerEndTime),
+      sleepAfterCurrentTrack: clearSleepTimer
+          ? false
+          : (sleepAfterCurrentTrack ?? this.sleepAfterCurrentTrack),
     );
   }
 }
@@ -77,9 +91,15 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   final YouTubeService _youTubeService;
   final SetelAudioHandler _audioHandler;
   final LibraryService? _libraryService;
+  final CacheService? _cacheService;
 
   final StreamController<PlayerState> _stateController =
       StreamController<PlayerState>.broadcast();
+
+  StreamSubscription? _playerStateSub;
+  StreamSubscription? _positionSub;
+  StreamSubscription? _durationSub;
+  StreamSubscription? _processingStateSub;
 
   List<Song> _queue = [];
   int _currentIndex = -1;
@@ -87,21 +107,27 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   RepeatMode _repeatMode = RepeatMode.off;
   Song? _currentSong;
 
+  Timer? _sleepTimer;
+  DateTime? _sleepTimerEndTime;
+  bool _sleepAfterCurrentTrack = false;
+
   AudioPlayerServiceImpl({
     AudioPlayer? player,
     required YouTubeService youTubeService,
     required SetelAudioHandler audioHandler,
     LibraryService? libraryService,
+    CacheService? cacheService,
   })  : _player = player ?? AudioPlayer(),
         _youTubeService = youTubeService,
         _audioHandler = audioHandler,
-        _libraryService = libraryService {
+        _libraryService = libraryService,
+        _cacheService = cacheService {
     _initListeners();
     _connectAudioHandler();
   }
 
   void _initListeners() {
-    _player.playerStateStream.listen((state) {
+    _playerStateSub = _player.playerStateStream.listen((state) {
       _emitState();
       _audioHandler.updatePlaybackState(
         isPlaying: state.playing,
@@ -111,15 +137,16 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       );
     });
 
-    _player.positionStream.listen((pos) {
+    _positionSub = _player.positionStream.listen((pos) {
       _emitState();
     });
 
-    _player.durationStream.listen((dur) {
+    _durationSub = _player.durationStream.listen((dur) {
       _emitState();
     });
 
-    _player.processingStateStream.listen((processingState) {
+    _processingStateSub =
+        _player.processingStateStream.listen((processingState) {
       if (processingState == ProcessingState.completed) {
         _handleTrackEnded();
       }
@@ -135,6 +162,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   }
 
   void _emitState() {
+    if (_stateController.isClosed) return;
+
     final state = PlayerState(
       isPlaying: _player.playing,
       position: _player.position,
@@ -143,11 +172,20 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       queue: List.unmodifiable(_queue),
       shuffle: _shuffle,
       repeatMode: _repeatMode,
+      sleepTimerEndTime: _sleepTimerEndTime,
+      sleepAfterCurrentTrack: _sleepAfterCurrentTrack,
     );
     _stateController.add(state);
   }
 
   Future<void> _handleTrackEnded() async {
+    // Cek jika sleep timer "Habis lagu ini" aktif
+    if (_sleepAfterCurrentTrack) {
+      await _player.pause();
+      cancelSleepTimer();
+      return;
+    }
+
     if (_repeatMode == RepeatMode.one) {
       await seek(Duration.zero);
       await _player.play();
@@ -179,7 +217,6 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   Future<void> playQueue(List<Song> songs, {int startIndex = 0}) async {
     if (songs.isEmpty) return;
 
-    // Jika antrean yang dikirim sama persis (misal dari queue_sheet), cukup update index
     if (!listEquals(_queue, songs)) {
       _queue = List.from(songs);
     }
@@ -212,14 +249,31 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
     // 2. Alur: resolveStreamUrl(videoId) → cek cache → just_audio.setUrl → play → recordPlay
     try {
-      if (song.cachedPath != null && File(song.cachedPath!).existsSync()) {
-        debugPrint('Memutar dari cache lokal: ${song.cachedPath}');
-        await _player.setFilePath(song.cachedPath!);
+      File? cachedFile;
+      if (_cacheService != null) {
+        cachedFile = await _cacheService.getCached(song);
+      } else if (song.cachedPath != null) {
+        final f = File(song.cachedPath!);
+        if (f.existsSync() && f.lengthSync() > 0) cachedFile = f;
+      }
+
+      if (cachedFile != null) {
+        debugPrint('Memutar dari cache lokal offline: ${cachedFile.path}');
+        await _player.setFilePath(cachedFile.path);
       } else {
-        debugPrint('Me-resolve stream YouTube untuk videoId: ${song.videoId}');
+        debugPrint(
+            'Cache miss. Me-resolve stream YouTube audio-only untuk videoId: ${song.videoId}');
         final streamUri =
             await _youTubeService.resolveStreamUrl(song.videoId);
         await _player.setUrl(streamUri.toString());
+
+        // Lakukan auto-cache di background saat stream dimuat (Fase 4)
+        if (_cacheService != null) {
+          unawaited(_cacheService.cacheSong(song, streamUri).catchError((e) {
+            debugPrint('Background auto-cache dilewati: $e');
+            return File('');
+          }));
+        }
       }
 
       await _player.play();
@@ -327,7 +381,6 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       _queue.insert(newIndex, song);
     }
 
-    // Koreksi index lagu yang sedang diputar
     if (_currentIndex == oldIndex) {
       _currentIndex = (newIndex > oldIndex) ? newIndex - 1 : newIndex;
     } else if (oldIndex < _currentIndex && newIndex > _currentIndex) {
@@ -374,6 +427,35 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     _emitState();
   }
 
+  // Sleep Timer (Fase 4)
+  void setSleepTimer(Duration? duration, {bool afterCurrentTrack = false}) {
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
+    _sleepAfterCurrentTrack = afterCurrentTrack;
+
+    if (afterCurrentTrack) {
+      _sleepTimerEndTime = null;
+    } else if (duration != null) {
+      _sleepTimerEndTime = DateTime.now().add(duration);
+      _sleepTimer = Timer(duration, () {
+        _player.pause();
+        cancelSleepTimer();
+      });
+    } else {
+      _sleepTimerEndTime = null;
+    }
+
+    _emitState();
+  }
+
+  void cancelSleepTimer() {
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
+    _sleepAfterCurrentTrack = false;
+    _sleepTimerEndTime = null;
+    _emitState();
+  }
+
   Future<void> _recordPlay(Song song) async {
     try {
       if (_libraryService != null) {
@@ -387,7 +469,6 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           ),
         );
 
-        // FIFO maks 50 entri sesuai §4.3
         while (historyBox.length > MAX_HISTORY_ENTRIES) {
           await historyBox.deleteAt(0);
         }
@@ -398,7 +479,14 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   }
 
   void dispose() {
+    _sleepTimer?.cancel();
+    _playerStateSub?.cancel();
+    _positionSub?.cancel();
+    _durationSub?.cancel();
+    _processingStateSub?.cancel();
     _player.dispose();
-    _stateController.close();
+    if (!_stateController.isClosed) {
+      _stateController.close();
+    }
   }
 }

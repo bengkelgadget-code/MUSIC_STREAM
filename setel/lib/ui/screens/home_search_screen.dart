@@ -166,6 +166,50 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
     );
   }
 
+  Widget _buildShimmerLoading() {
+    return ListView.separated(
+      padding: const EdgeInsets.only(top: 8, bottom: 80),
+      itemCount: 8,
+      separatorBuilder: (context, index) => const Divider(
+        color: Colors.white10,
+        height: 1,
+        indent: 80,
+      ),
+      itemBuilder: (context, index) {
+        return ListTile(
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          leading: Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+          title: Container(
+            width: double.infinity,
+            height: 14,
+            margin: const EdgeInsets.only(right: 60),
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          subtitle: Container(
+            width: 120,
+            height: 12,
+            margin: const EdgeInsets.only(top: 6, right: 140),
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final searchState = ref.watch(searchControllerProvider);
@@ -221,23 +265,7 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
       body: Builder(
         builder: (context) {
           if (searchState.isLoading) {
-            return const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      Color(0xFF1DB954),
-                    ),
-                  ),
-                  SizedBox(height: 16),
-                  Text(
-                    'Mencari di YouTube...',
-                    style: TextStyle(color: Colors.white60),
-                  ),
-                ],
-              ),
-            );
+            return _buildShimmerLoading();
           }
 
           if (searchState.error != null) {

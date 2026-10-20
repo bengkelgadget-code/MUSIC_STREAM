@@ -6,6 +6,7 @@ import '../../core/utils.dart';
 import '../../services/audio_player_service.dart';
 import '../../state/providers.dart';
 import '../widgets/queue_sheet.dart';
+import 'settings_screen.dart';
 
 class NowPlayingScreen extends ConsumerStatefulWidget {
   const NowPlayingScreen({super.key});
@@ -36,6 +37,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     final duration = playerState.duration;
     final position = playerState.position;
     final isFavorite = libraryState.favoriteIds.contains(song.videoId);
+    final isSleepTimerActive = playerState.sleepTimerEndTime != null ||
+        playerState.sleepAfterCurrentTrack;
 
     // Hitung posisi slider (dalam detik)
     final totalSeconds = duration.inSeconds.toDouble();
@@ -60,7 +63,22 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         centerTitle: true,
         actions: [
           IconButton(
+            icon: Icon(
+              isSleepTimerActive
+                  ? Icons.bedtime
+                  : Icons.bedtime_outlined,
+              color: isSleepTimerActive
+                  ? const Color(0xFF1DB954)
+                  : Colors.white70,
+            ),
+            tooltip: 'Timer Tidur',
+            onPressed: () {
+              showSleepTimerBottomSheet(context, ref);
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.queue_music),
+            tooltip: 'Daftar Antrean',
             onPressed: () {
               showModalBottomSheet(
                 context: context,

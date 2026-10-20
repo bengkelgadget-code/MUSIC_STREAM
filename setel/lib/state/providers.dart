@@ -1,5 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hive/hive.dart';
 
+import '../core/constants.dart';
+import '../models/settings.dart';
 import '../services/audio_handler.dart';
 import '../services/audio_player_service.dart';
 import '../services/cache_service.dart';
@@ -18,23 +21,25 @@ final libraryServiceProvider = Provider<LibraryService>((ref) {
   return LibraryServiceImpl();
 });
 
+final cacheServiceProvider = Provider<CacheService>((ref) {
+  return CacheServiceImpl();
+});
+
 final audioPlayerServiceProvider = Provider<AudioPlayerService>((ref) {
   final ytService = ref.watch(youtubeServiceProvider);
   final libService = ref.watch(libraryServiceProvider);
+  final cacheService = ref.watch(cacheServiceProvider);
   final handler = globalAudioHandler;
   final service = AudioPlayerServiceImpl(
     youTubeService: ytService,
     audioHandler: handler,
     libraryService: libService,
+    cacheService: cacheService,
   );
   ref.onDispose(() {
     service.dispose();
   });
   return service;
-});
-
-final cacheServiceProvider = Provider<CacheService>((ref) {
-  throw UnimplementedError('CacheService will be implemented in Fase 4');
 });
 
 // Controllers
@@ -55,10 +60,19 @@ final libraryControllerProvider =
 
 class SettingsController extends Notifier<int> {
   @override
-  int build() => 500;
+  int build() {
+    final box = Hive.box<Settings>(BOX_SETTINGS);
+    final settings = box.get(0);
+    return settings?.cacheLimitMB ?? DEFAULT_CACHE_LIMIT_MB;
+  }
 
-  void setCacheLimit(int limitMB) {
+  Future<void> setCacheLimit(int limitMB) async {
     state = limitMB;
+    final box = Hive.box<Settings>(BOX_SETTINGS);
+    await box.put(0, Settings(cacheLimitMB: limitMB));
+
+    final cacheService = ref.read(cacheServiceProvider);
+    await cacheService.enforceLimit();
   }
 }
 

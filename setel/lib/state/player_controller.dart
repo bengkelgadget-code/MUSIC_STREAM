@@ -14,6 +14,8 @@ class PlayerControllerState {
   final List<Song> queue;
   final bool shuffle;
   final RepeatMode repeatMode;
+  final DateTime? sleepTimerEndTime;
+  final bool sleepAfterCurrentTrack;
 
   const PlayerControllerState({
     this.currentSong,
@@ -23,6 +25,8 @@ class PlayerControllerState {
     this.queue = const [],
     this.shuffle = false,
     this.repeatMode = RepeatMode.off,
+    this.sleepTimerEndTime,
+    this.sleepAfterCurrentTrack = false,
   });
 
   PlayerControllerState copyWith({
@@ -33,6 +37,9 @@ class PlayerControllerState {
     List<Song>? queue,
     bool? shuffle,
     RepeatMode? repeatMode,
+    DateTime? sleepTimerEndTime,
+    bool? sleepAfterCurrentTrack,
+    bool clearSleepTimer = false,
   }) {
     return PlayerControllerState(
       currentSong: currentSong ?? this.currentSong,
@@ -42,6 +49,12 @@ class PlayerControllerState {
       queue: queue ?? this.queue,
       shuffle: shuffle ?? this.shuffle,
       repeatMode: repeatMode ?? this.repeatMode,
+      sleepTimerEndTime: clearSleepTimer
+          ? null
+          : (sleepTimerEndTime ?? this.sleepTimerEndTime),
+      sleepAfterCurrentTrack: clearSleepTimer
+          ? false
+          : (sleepAfterCurrentTrack ?? this.sleepAfterCurrentTrack),
     );
   }
 }
@@ -64,6 +77,8 @@ class PlayerController extends Notifier<PlayerControllerState> {
         queue: playerState.queue,
         shuffle: playerState.shuffle,
         repeatMode: playerState.repeatMode,
+        sleepTimerEndTime: playerState.sleepTimerEndTime,
+        sleepAfterCurrentTrack: playerState.sleepAfterCurrentTrack,
       );
     });
 
@@ -114,6 +129,21 @@ class PlayerController extends Notifier<PlayerControllerState> {
     final service = _audioPlayerService;
     if (service is AudioPlayerServiceImpl) {
       service.clearQueue();
+    }
+  }
+
+  void setSleepTimer(Duration? duration, {bool afterCurrentTrack = false}) {
+    final service = _audioPlayerService;
+    if (service is AudioPlayerServiceImpl) {
+      service.setSleepTimer(duration,
+          afterCurrentTrack: afterCurrentTrack);
+    }
+  }
+
+  void cancelSleepTimer() {
+    final service = _audioPlayerService;
+    if (service is AudioPlayerServiceImpl) {
+      service.cancelSleepTimer();
     }
   }
 }
