@@ -32,6 +32,9 @@ void main() {
       final updated = song.copyWith(cachedPath: '/path/to/cache.m4a');
       expect(updated.cachedPath, '/path/to/cache.m4a');
       expect(updated.videoId, song.videoId);
+
+      final cleared = updated.copyWith(clearCachedPath: true);
+      expect(cleared.cachedPath, isNull);
     });
 
     test('Playlist, HistoryEntry, SearchCache, and Settings instantiate', () {

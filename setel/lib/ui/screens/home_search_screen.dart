@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/song.dart';
+import '../../services/update_service.dart';
 import '../../state/providers.dart';
 import '../widgets/song_tile.dart';
 
@@ -14,6 +15,14 @@ class HomeSearchScreen extends ConsumerStatefulWidget {
 
 class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
   final TextEditingController _textController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      UpdateService.checkUpdate(context, showNoUpdateToast: false);
+    });
+  }
 
   @override
   void dispose() {
@@ -65,28 +74,41 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                   child: ListView.builder(
                     shrinkWrap: true,
                     itemCount: libraryState.playlists.length,
-                    itemBuilder: (context, idx) {
-                      final pl = libraryState.playlists[idx];
+                    itemBuilder: (context, index) {
+                      final playlist = libraryState.playlists[index];
+                      final isAlreadyAdded =
+                          playlist.songIds.contains(song.videoId);
+
                       return ListTile(
                         leading: const Icon(Icons.playlist_play,
                             color: Colors.white70),
-                        title: Text(pl.name,
+                        title: Text(playlist.name,
                             style: const TextStyle(color: Colors.white)),
-                        subtitle: Text('${pl.songIds.length} lagu',
+                        subtitle: Text('${playlist.songIds.length} lagu',
                             style: const TextStyle(
                                 color: Colors.white38, fontSize: 12)),
-                        onTap: () async {
-                          await libraryController.addToPlaylist(pl.id, song);
-                          if (ctx.mounted) Navigator.pop(ctx);
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Ditambahkan ke "${pl.name}"'),
-                                backgroundColor: const Color(0xFF282828),
-                              ),
-                            );
-                          }
-                        },
+                        trailing: isAlreadyAdded
+                            ? const Icon(Icons.check,
+                                color: Color(0xFF1DB954), size: 20)
+                            : null,
+                        onTap: isAlreadyAdded
+                            ? null
+                            : () async {
+                                await libraryController.addToPlaylist(
+                                    playlist.id, song);
+                                if (ctx.mounted) Navigator.pop(ctx);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      duration: const Duration(seconds: 2),
+                                      content: Text(
+                                          'Ditambahkan ke playlist "${playlist.name}"'),
+                                      backgroundColor:
+                                          const Color(0xFF282828),
+                                    ),
+                                  );
+                                }
+                              },
                       );
                     },
                   ),
@@ -98,7 +120,7 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child:
-                const Text('Batal', style: TextStyle(color: Colors.white54)),
+                const Text('Tutup', style: TextStyle(color: Colors.white54)),
           ),
         ],
       ),
@@ -107,23 +129,27 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
 
   void _showCreatePlaylistDialog(BuildContext context, {Song? songToAdd}) {
     final textController = TextEditingController();
+    final libraryController = ref.read(libraryControllerProvider.notifier);
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF282828),
-        title: const Text('Playlist Baru',
+        title: const Text('Buat Playlist Baru',
             style: TextStyle(color: Colors.white)),
         content: TextField(
           controller: textController,
           autofocus: true,
           style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            hintText: 'Nama playlist...',
-            hintStyle: TextStyle(color: Colors.white38),
+          decoration: InputDecoration(
+            hintText: 'Nama Playlist',
+            hintStyle: const TextStyle(color: Colors.white38),
             enabledBorder: UnderlineInputBorder(
-                borderSide: BorderSide(color: Colors.white24)),
-            focusedBorder: UnderlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF1DB954))),
+              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
+            ),
+            focusedBorder: const UnderlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF1DB954)),
+            ),
           ),
         ),
         actions: [
@@ -135,23 +161,22 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF1DB954),
-              foregroundColor: Colors.black,
+              foregroundColor: Colors.white,
             ),
             onPressed: () async {
               final name = textController.text.trim();
               if (name.isNotEmpty) {
-                final pl = await ref
-                    .read(libraryControllerProvider.notifier)
-                    .createPlaylist(name);
+                final playlist =
+                    await libraryController.createPlaylist(name);
                 if (songToAdd != null) {
-                  await ref
-                      .read(libraryControllerProvider.notifier)
-                      .addToPlaylist(pl.id, songToAdd);
+                  await libraryController.addToPlaylist(
+                      playlist.id, songToAdd);
                 }
                 if (ctx.mounted) Navigator.pop(ctx);
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
+                      duration: const Duration(seconds: 2),
                       content: Text('Playlist "$name" berhasil dibuat'),
                       backgroundColor: const Color(0xFF282828),
                     ),
@@ -159,54 +184,10 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                 }
               }
             },
-            child: const Text('Simpan'),
+            child: const Text('Buat'),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildShimmerLoading() {
-    return ListView.separated(
-      padding: const EdgeInsets.only(top: 8, bottom: 80),
-      itemCount: 8,
-      separatorBuilder: (context, index) => const Divider(
-        color: Colors.white10,
-        height: 1,
-        indent: 80,
-      ),
-      itemBuilder: (context, index) {
-        return ListTile(
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          leading: Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: Colors.white10,
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-          title: Container(
-            width: double.infinity,
-            height: 14,
-            margin: const EdgeInsets.only(right: 60),
-            decoration: BoxDecoration(
-              color: Colors.white10,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-          subtitle: Container(
-            width: 120,
-            height: 12,
-            margin: const EdgeInsets.only(top: 6, right: 140),
-            decoration: BoxDecoration(
-              color: Colors.white10,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -240,21 +221,19 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
               prefixIcon: const Icon(Icons.search, color: Colors.white54),
               suffixIcon: _textController.text.isNotEmpty
                   ? IconButton(
-                      icon: const Icon(Icons.clear,
-                          color: Colors.white54, size: 20),
+                      icon:
+                          const Icon(Icons.clear, color: Colors.white54, size: 20),
                       onPressed: () {
-                        _textController.clear();
-                        setState(() {});
+                        setState(() {
+                          _textController.clear();
+                        });
                         ref.read(searchControllerProvider.notifier).clear();
                       },
                     )
-                  : IconButton(
-                      icon: const Icon(Icons.arrow_forward,
-                          color: Color(0xFF1DB954), size: 20),
-                      onPressed: _onSearch,
-                    ),
+                  : null,
               border: InputBorder.none,
-              contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             ),
             onChanged: (text) {
               setState(() {});
@@ -265,15 +244,19 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
       body: Builder(
         builder: (context) {
           if (searchState.isLoading) {
-            return _buildShimmerLoading();
+            return const Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF1DB954)),
+              ),
+            );
           }
 
           if (searchState.error != null) {
             return Center(
               child: Padding(
-                padding: const EdgeInsets.all(24.0),
+                padding: const EdgeInsets.symmetric(horizontal: 24.0),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     const Icon(Icons.error_outline,
                         size: 48, color: Colors.redAccent),
@@ -281,13 +264,14 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                     Text(
                       searchState.error!,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white70),
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 14),
                     ),
                     const SizedBox(height: 16),
                     ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF1DB954),
-                        foregroundColor: Colors.black,
+                        foregroundColor: Colors.white,
                       ),
                       onPressed: _onSearch,
                       child: const Text('Coba Lagi'),
@@ -300,9 +284,16 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
 
           if (searchState.results.isEmpty && searchState.query.isNotEmpty) {
             return Center(
-              child: Text(
-                'Tidak ada hasil untuk "${searchState.query}"',
-                style: const TextStyle(color: Colors.white54),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.search_off, size: 54, color: Colors.white24),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Tidak ditemukan hasil untuk "${searchState.query}"',
+                    style: const TextStyle(color: Colors.white54, fontSize: 14),
+                  ),
+                ],
               ),
             );
           }
@@ -310,22 +301,21 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
           if (searchState.results.isEmpty) {
             return const Center(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.library_music_outlined,
-                      size: 64, color: Colors.white24),
+                  Icon(Icons.music_note, size: 64, color: Colors.white24),
                   SizedBox(height: 16),
                   Text(
-                    'Cari Musik Favoritmu',
+                    'Cari musik favoritmu di Setel',
                     style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
                       color: Colors.white70,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                   SizedBox(height: 8),
                   Text(
-                    'Ketik judul lagu atau artis pada kolom di atas',
+                    'Jutaan lagu YouTube siap diputar tanpa batas',
                     style: TextStyle(color: Colors.white38, fontSize: 13),
                   ),
                 ],

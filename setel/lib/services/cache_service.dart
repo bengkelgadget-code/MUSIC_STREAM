@@ -177,7 +177,7 @@ class CacheServiceImpl implements CacheService {
           // Hapus referensi cachedPath pada songsBox
           final song = songsBox.get(videoId);
           if (song != null) {
-            await songsBox.put(videoId, song.copyWith(cachedPath: null));
+            await songsBox.put(videoId, song.copyWith(clearCachedPath: true));
           }
           debugPrint('File cache LRU terhapus: $filename ($size bytes)');
         } catch (e) {
@@ -228,7 +228,7 @@ class CacheServiceImpl implements CacheService {
       for (final key in songsBox.keys) {
         final song = songsBox.get(key);
         if (song != null && song.cachedPath != null) {
-          await songsBox.put(key, song.copyWith(cachedPath: null));
+          await songsBox.put(key, song.copyWith(clearCachedPath: true));
         }
       }
       debugPrint('Cache offline berhasil dibersihkan.');

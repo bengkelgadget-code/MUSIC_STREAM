@@ -38,6 +38,7 @@ class Song {
     int? durationMs,
     String? thumbnailUrl,
     String? cachedPath,
+    bool clearCachedPath = false,
   }) {
     return Song(
       videoId: videoId ?? this.videoId,
@@ -45,7 +46,7 @@ class Song {
       artist: artist ?? this.artist,
       durationMs: durationMs ?? this.durationMs,
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
-      cachedPath: cachedPath ?? this.cachedPath,
+      cachedPath: clearCachedPath ? null : (cachedPath ?? this.cachedPath),
     );
   }
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants.dart';
+import '../../services/update_service.dart';
 import '../../state/providers.dart';
 
 void showSleepTimerBottomSheet(BuildContext context, WidgetRef ref) {
@@ -158,46 +159,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   String _formatBytes(int bytes) {
     if (bytes <= 0) return '0 B';
-    const suffixes = ['B', 'KB', 'MB', 'GB'];
-    var i = 0;
-    double size = bytes.toDouble();
-    while (size >= 1024 && i < suffixes.length - 1) {
-      size /= 1024;
-      i++;
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
     }
-    return '${size.toStringAsFixed(1)} ${suffixes[i]}';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
   void _showChangeLimitDialog(BuildContext context, int currentLimitMB) {
-    final options = [250, 500, 1000, 2000];
+    const limits = [250, 500, 1000, 2000, 5000];
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF282828),
-        title: const Text('Batas Penyimpanan Cache',
+        title: const Text('Batas Kapasitas Cache',
             style: TextStyle(color: Colors.white)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
-          children: options.map((limit) {
-            final isSelected = limit == currentLimitMB;
-            final label = limit >= 1000
-                ? '${(limit / 1000).toStringAsFixed(0)} GB'
+          children: limits.map((limit) {
+            final label = (limit >= 1000)
+                ? '${limit ~/ 1000} GB'
                 : '$limit MB';
-            return ListTile(
-              leading: Icon(
-                isSelected
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_unchecked,
-                color: isSelected ? const Color(0xFF1DB954) : Colors.white54,
-              ),
-              title: Text(label,
-                  style: TextStyle(
-                    color: isSelected ? const Color(0xFF1DB954) : Colors.white,
-                    fontWeight:
-                        isSelected ? FontWeight.bold : FontWeight.normal,
-                  )),
-              onTap: () async {
+
+            return RadioListTile<int>(
+              value: limit,
+              // ignore: deprecated_member_use
+              groupValue: currentLimitMB,
+              title: Text(label, style: const TextStyle(color: Colors.white)),
+              activeColor: const Color(0xFF1DB954),
+              // ignore: deprecated_member_use
+              onChanged: (val) async {
                 await ref
                     .read(settingsControllerProvider.notifier)
                     .setCacheLimit(limit);
@@ -399,6 +390,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 style: TextStyle(color: Colors.white)),
             subtitle: Text('1.0.0 (Fase 4 — Final)',
                 style: TextStyle(color: Colors.white38, fontSize: 13)),
+          ),
+          ListTile(
+            leading:
+                const Icon(Icons.system_update_alt, color: Colors.white70),
+            title: const Text('Periksa Pembaruan',
+                style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Periksa pembaruan OTA via GitHub',
+                style: TextStyle(color: Colors.white38, fontSize: 13)),
+            trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+            onTap: () =>
+                UpdateService.checkUpdate(context, showNoUpdateToast: true),
           ),
           const ListTile(
             leading:

@@ -152,5 +152,65 @@ void main() {
 
       playerService.dispose();
     });
+
+    test(
+        'Setelah evict LRU dan clearCache, entry songsBox harus memiliki cachedPath == null',
+        () async {
+      final songsBox = Hive.box<Song>(BOX_SONGS);
+      final settingsBox = Hive.box<Settings>(BOX_SETTINGS);
+
+      // 1. Uji LRU eviction membersihkan cachedPath
+      await settingsBox.put(0, const Settings(cacheLimitMB: 1));
+
+      final fileOld = File('${cacheDir.path}/evict_test.m4a');
+      await fileOld.writeAsBytes(List.filled(700 * 1024, 0));
+      await fileOld.setLastModified(
+          DateTime.now().subtract(const Duration(days: 1)));
+
+      final fileOther = File('${cacheDir.path}/keep_test.m4a');
+      await fileOther.writeAsBytes(List.filled(600 * 1024, 0));
+
+      // Simpan Song di songsBox dengan cachedPath
+      const songToEvict = Song(
+        videoId: 'evict_test',
+        title: 'Song to Evict',
+        artist: 'Artist',
+        durationMs: 120000,
+        thumbnailUrl: '',
+        cachedPath: '/some/path/evict_test.m4a',
+      );
+      await songsBox.put('evict_test', songToEvict);
+      expect(songsBox.get('evict_test')?.cachedPath, isNotNull);
+
+      // Jalankan enforceLimit
+      await cacheService.enforceLimit();
+
+      // Pastikan entry songsBox sekarang cachedPath == null
+      final evictedSongInBox = songsBox.get('evict_test');
+      expect(evictedSongInBox, isNotNull);
+      expect(evictedSongInBox?.cachedPath, isNull,
+          reason: 'cachedPath harus null setelah LRU eviction');
+
+      // 2. Uji clearCache membersihkan cachedPath
+      const songToClear = Song(
+        videoId: 'clear_test',
+        title: 'Song to Clear',
+        artist: 'Artist',
+        durationMs: 150000,
+        thumbnailUrl: '',
+        cachedPath: '/some/path/clear_test.m4a',
+      );
+      await songsBox.put('clear_test', songToClear);
+      expect(songsBox.get('clear_test')?.cachedPath, isNotNull);
+
+      // Jalankan clearCache
+      await cacheService.clearCache();
+
+      // Pastikan entry songsBox sekarang cachedPath == null
+      final clearedSongInBox = songsBox.get('clear_test');
+      expect(clearedSongInBox, isNotNull);
+      expect(clearedSongInBox?.cachedPath, isNull,
+          reason: 'cachedPath harus null setelah clearCache');
+    });
   });
 }
