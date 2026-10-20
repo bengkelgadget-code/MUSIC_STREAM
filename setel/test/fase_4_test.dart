@@ -15,7 +15,7 @@ import 'package:setel/services/youtube_service.dart';
 
 class DummyYouTubeService implements YouTubeService {
   @override
-  Future<List<Song>> search(String query) async => [];
+  Future<List<Song>> search(String query, {int limit = 25}) async => [];
 
   @override
   Future<AudioStreamResult> resolveStreamUrl(String videoId,

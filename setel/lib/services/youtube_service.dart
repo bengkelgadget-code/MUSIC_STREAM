@@ -25,6 +25,17 @@ int parseIso8601Duration(String isoDuration) {
       1000;
 }
 
+int parseDurationString(String? dur) {
+  if (dur == null || dur.isEmpty) return 0;
+  final parts = dur.split(':').map((p) => int.tryParse(p) ?? 0).toList();
+  if (parts.length == 2) {
+    return (parts[0] * 60 + parts[1]) * 1000;
+  } else if (parts.length == 3) {
+    return (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+  }
+  return 0;
+}
+
 AudioStreamInfo selectStreamByFormat(
   Iterable<AudioStreamInfo> streams,
   String format,
@@ -81,7 +92,7 @@ class AudioStreamResult {
 
 abstract class YouTubeService {
   /// Cari lagu via YouTube Data API v3 atau Explode Engine. WAJIB cek SearchCache dulu (TTL 24 jam).
-  Future<List<Song>> search(String query);
+  Future<List<Song>> search(String query, {int limit = 25});
 
   /// Resolve stream URL audio-only via youtube_explode_dart.
   /// Memilih audio-only sesuai format stream yang aktif (Tertinggi, Seimbang, atau Hemat Data).
@@ -149,7 +160,7 @@ class YouTubeServiceImpl implements YouTubeService {
   }
 
   @override
-  Future<List<Song>> search(String query) async {
+  Future<List<Song>> search(String query, {int limit = 25}) async {
     final cleanQuery = query.trim().toLowerCase();
     if (cleanQuery.isEmpty) return [];
 
@@ -173,13 +184,18 @@ class YouTubeServiceImpl implements YouTubeService {
       }
 
       if (allFound && cachedSongs.isNotEmpty) {
-        debugPrint(
-            'SearchCache HIT: "$query" (${cachedSongs.length} songs from cache)');
-        return cachedSongs;
+        if (cachedSongs.length >= limit) {
+          debugPrint(
+              'SearchCache HIT: "$query" (${cachedSongs.length} songs from cache, returning $limit)');
+          return cachedSongs.take(limit).toList();
+        } else {
+          debugPrint(
+              'SearchCache memiliki ${cachedSongs.length} lagu, tetapi dibutuhkan $limit. Mengambil ulang...');
+        }
       }
     }
 
-    debugPrint('SearchCache MISS: "$query". Querying YouTube...');
+    debugPrint('SearchCache MISS: "$query". Querying YouTube (limit: $limit)...');
     List<Song> songs = [];
 
     // Mode Akses Katalog dari Settings
@@ -218,7 +234,7 @@ class YouTubeServiceImpl implements YouTubeService {
             'q': query,
             'type': 'video',
             'videoCategoryId': '10', // Kategori Musik
-            'maxResults': 25,
+            'maxResults': limit.clamp(1, 50),
             'key': YOUTUBE_API_KEY,
           },
         );
@@ -287,24 +303,72 @@ class YouTubeServiceImpl implements YouTubeService {
       // 3. Fallback pencarian tanpa API key via youtube_explode_dart
       final yt = YoutubeExplode();
       try {
-        final searchList = await yt.search.search(query);
-        songs = searchList.map((video) {
-          final videoId = video.id.value;
-          final title = video.title;
-          final artist = video.author;
-          final durationMs = video.duration?.inMilliseconds ?? 0;
-          final thumbnailUrl = video.thumbnails.highResUrl.isNotEmpty
-              ? video.thumbnails.highResUrl
-              : 'https://img.youtube.com/vi/$videoId/hqdefault.jpg';
+        final collected = <Song>[];
+        try {
+          SearchList? page = await yt.search.searchContent(query);
+          while (page != null && collected.length < limit) {
+            for (final item in page) {
+              if (item is SearchVideo) {
+                final videoId = item.id.value;
+                final title = item.title;
+                final artist = item.author;
+                final durationMs = parseDurationString(item.duration);
+                final thumbnailUrl = item.thumbnails.isNotEmpty
+                    ? item.thumbnails.last.url.toString()
+                    : 'https://img.youtube.com/vi/$videoId/hqdefault.jpg';
 
-          return Song(
-            videoId: videoId,
-            title: title,
-            artist: artist,
-            durationMs: durationMs,
-            thumbnailUrl: thumbnailUrl,
-          );
-        }).toList();
+                collected.add(
+                  Song(
+                    videoId: videoId,
+                    title: title,
+                    artist: artist,
+                    durationMs: durationMs,
+                    thumbnailUrl: thumbnailUrl,
+                  ),
+                );
+                if (collected.length >= limit) break;
+              }
+            }
+            if (collected.length < limit) {
+              page = await page.nextPage();
+            } else {
+              break;
+            }
+          }
+        } catch (scErr) {
+          debugPrint('searchContent gagal: $scErr. Menggunakan search()...');
+          if (collected.isEmpty) {
+            VideoSearchList? searchList = await yt.search.search(query);
+            while (searchList != null && collected.length < limit) {
+              for (final video in searchList) {
+                final videoId = video.id.value;
+                final title = video.title;
+                final artist = video.author;
+                final durationMs = video.duration?.inMilliseconds ?? 0;
+                final thumbnailUrl = video.thumbnails.highResUrl.isNotEmpty
+                    ? video.thumbnails.highResUrl
+                    : 'https://img.youtube.com/vi/$videoId/hqdefault.jpg';
+
+                collected.add(
+                  Song(
+                    videoId: videoId,
+                    title: title,
+                    artist: artist,
+                    durationMs: durationMs,
+                    thumbnailUrl: thumbnailUrl,
+                  ),
+                );
+                if (collected.length >= limit) break;
+              }
+              if (collected.length < limit) {
+                searchList = await searchList.nextPage();
+              } else {
+                break;
+              }
+            }
+          }
+        }
+        songs = collected;
       } catch (e) {
         throw AppException('Gagal mencari lagu di YouTube.', e);
       } finally {

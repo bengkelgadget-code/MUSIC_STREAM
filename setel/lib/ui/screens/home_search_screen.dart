@@ -215,10 +215,6 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
     return ValueListenableBuilder<Box<int>>(
       valueListenable: playCountsBox.listenable(),
       builder: (context, box, _) {
-        if (box.isEmpty) {
-          return const SizedBox.shrink();
-        }
-
         final libraryService = ref.read(libraryServiceProvider);
         return FutureBuilder<List<Song>>(
           future: libraryService.getMostPlayed(limit: 10),

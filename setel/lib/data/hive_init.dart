@@ -32,10 +32,24 @@ class HiveInit {
     await Hive.openBox<Song>(BOX_SONGS);
     await Hive.openBox<Playlist>(BOX_PLAYLISTS);
     await Hive.openBox<String>(BOX_FAVORITES);
-    await Hive.openBox<HistoryEntry>(BOX_HISTORY);
+    final historyBox = await Hive.openBox<HistoryEntry>(BOX_HISTORY);
     await Hive.openBox<SearchCache>(BOX_SEARCH_CACHE);
     await Hive.openBox(BOX_SETTINGS);
-    await Hive.openBox<int>(BOX_PLAY_COUNTS);
+    final playCountsBox = await Hive.openBox<int>(BOX_PLAY_COUNTS);
+
+    // Migrasi sekali jalan: jika play_counts kosong dan history ada data,
+    // hitung jumlah kemunculan tiap videoId dan isi play_counts.
+    if (playCountsBox.isEmpty && historyBox.isNotEmpty) {
+      final counts = <String, int>{};
+      for (final entry in historyBox.values) {
+        counts[entry.videoId] = (counts[entry.videoId] ?? 0) + 1;
+      }
+      for (final entry in counts.entries) {
+        await playCountsBox.put(entry.key, entry.value);
+      }
+      debugPrint(
+          'Migrasi play_counts dari BOX_HISTORY selesai: ${counts.length} lagu dihitung.');
+    }
 
     debugPrint('Hive initialized and all boxes opened successfully.');
   }

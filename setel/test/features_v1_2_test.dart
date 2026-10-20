@@ -11,7 +11,6 @@ import 'package:setel/models/settings.dart';
 import 'package:setel/models/song.dart';
 import 'package:setel/services/library_service.dart';
 import 'package:setel/services/youtube_service.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Playlist;
 
 void main() {
   late Directory tempDir;
@@ -260,6 +259,174 @@ void main() {
       expect(mostPlayed[0].videoId, 'song_c'); // 5x
       expect(mostPlayed[1].videoId, 'song_a'); // 3x
       expect(mostPlayed[2].videoId, 'song_b'); // 1x
+    });
+
+    test('One-time migration populates play_counts from BOX_HISTORY when empty',
+        () async {
+      final libService = LibraryServiceImpl();
+      final songsBox = Hive.box<Song>(BOX_SONGS);
+      final playCountsBox = Hive.box<int>(BOX_PLAY_COUNTS);
+      final historyBox = Hive.box<HistoryEntry>(BOX_HISTORY);
+
+      await playCountsBox.clear();
+      await historyBox.clear();
+
+      final songX = const Song(
+        videoId: 'migrated_x',
+        title: 'Migrated X',
+        artist: 'Artist X',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+      final songY = const Song(
+        videoId: 'migrated_y',
+        title: 'Migrated Y',
+        artist: 'Artist Y',
+        durationMs: 190000,
+        thumbnailUrl: '',
+      );
+      await songsBox.put(songX.videoId, songX);
+      await songsBox.put(songY.videoId, songY);
+
+      // Add history entries: 3 for X, 1 for Y
+      await historyBox.add(HistoryEntry(
+        videoId: songX.videoId,
+        playedAt: DateTime.now().subtract(const Duration(minutes: 10)),
+      ));
+      await historyBox.add(HistoryEntry(
+        videoId: songX.videoId,
+        playedAt: DateTime.now().subtract(const Duration(minutes: 5)),
+      ));
+      await historyBox.add(HistoryEntry(
+        videoId: songX.videoId,
+        playedAt: DateTime.now(),
+      ));
+      await historyBox.add(HistoryEntry(
+        videoId: songY.videoId,
+        playedAt: DateTime.now(),
+      ));
+
+      expect(playCountsBox.isEmpty, isTrue);
+
+      final mostPlayed = await libService.getMostPlayed(limit: 10);
+      expect(playCountsBox.isNotEmpty, isTrue);
+      expect(playCountsBox.get('migrated_x'), 3);
+      expect(playCountsBox.get('migrated_y'), 1);
+      expect(mostPlayed.length, 2);
+      expect(mostPlayed[0].videoId, 'migrated_x');
+      expect(mostPlayed[1].videoId, 'migrated_y');
+    });
+
+    test(
+        'Two-stage category filter falls back to 15 min when stage 1 has < 5 songs',
+        () {
+      const bannedKeywords = [
+        'full album',
+        'kompilasi',
+        'nonstop',
+        '1 jam',
+        '2 jam',
+        '3 jam',
+        '24 jam',
+      ];
+
+      bool hasBannedKeyword(Song song) {
+        final titleLower = song.title.toLowerCase();
+        for (final kw in bannedKeywords) {
+          if (titleLower.contains(kw)) return true;
+        }
+        return false;
+      }
+
+      List<Song> applyTwoStageFilter(List<Song> songs) {
+        final stage1 = songs.where((song) {
+          if (hasBannedKeyword(song)) return false;
+          if (song.durationMs > 0 && song.durationMs > 600000) return false;
+          return true;
+        }).toList();
+
+        if (stage1.length < 5) {
+          return songs.where((song) {
+            if (hasBannedKeyword(song)) return false;
+            if (song.durationMs > 0 && song.durationMs > 900000) return false;
+            return true;
+          }).toList();
+        }
+        return stage1;
+      }
+
+      // Skenario A: Ada 6 lagu <= 10 min -> tetap gunakan tahap 1 (600000 ms)
+      final songsA = List.generate(
+        6,
+        (i) => Song(
+          videoId: 'short_$i',
+          title: 'Short Song $i',
+          artist: 'Artist',
+          durationMs: 200000,
+          thumbnailUrl: '',
+        ),
+      )..add(const Song(
+          videoId: 'med_1',
+          title: 'Medium Song (12 min)',
+          artist: 'Artist',
+          durationMs: 720000,
+          thumbnailUrl: '',
+        ));
+
+      final resultA = applyTwoStageFilter(songsA);
+      expect(resultA.length, 6);
+      expect(resultA.any((s) => s.videoId == 'med_1'), isFalse);
+
+      // Skenario B: Hanya ada 2 lagu <= 10 min, tapi ada 2 lagu antara 10-15 min
+      final songsB = [
+        const Song(
+          videoId: 's_1',
+          title: 'Song 1 (4 min)',
+          artist: 'Artist',
+          durationMs: 240000,
+          thumbnailUrl: '',
+        ),
+        const Song(
+          videoId: 's_2',
+          title: 'Song 2 (5 min)',
+          artist: 'Artist',
+          durationMs: 300000,
+          thumbnailUrl: '',
+        ),
+        const Song(
+          videoId: 's_3',
+          title: 'Song 3 (12 min)',
+          artist: 'Artist',
+          durationMs: 720000,
+          thumbnailUrl: '',
+        ),
+        const Song(
+          videoId: 's_4',
+          title: 'Song 4 (14 min)',
+          artist: 'Artist',
+          durationMs: 840000,
+          thumbnailUrl: '',
+        ),
+        const Song(
+          videoId: 's_banned',
+          title: 'Kompilasi Dangdut Mantap',
+          artist: 'Artist',
+          durationMs: 700000,
+          thumbnailUrl: '',
+        ),
+        const Song(
+          videoId: 's_too_long',
+          title: 'Live Concert 30 min',
+          artist: 'Artist',
+          durationMs: 1800000,
+          thumbnailUrl: '',
+        ),
+      ];
+
+      final resultB = applyTwoStageFilter(songsB);
+      expect(resultB.length, 4);
+      expect(resultB.map((s) => s.videoId),
+          containsAll(['s_1', 's_2', 's_3', 's_4']));
     });
   });
 }

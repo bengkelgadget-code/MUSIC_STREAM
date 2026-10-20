@@ -42,7 +42,8 @@ class _DiscoveryPlaylistScreenState
 
     try {
       final ytService = ref.read(youtubeServiceProvider);
-      final results = await ytService.search(widget.category.searchQuery);
+      final results =
+          await ytService.search(widget.category.searchQuery, limit: 50);
 
       const bannedKeywords = [
         'full album',
@@ -54,22 +55,41 @@ class _DiscoveryPlaylistScreenState
         '24 jam',
       ];
 
-      final filtered = results.where((song) {
-        if (song.durationMs > 0 && song.durationMs > 600000) {
-          return false;
-        }
+      bool hasBannedKeyword(Song song) {
         final titleLower = song.title.toLowerCase();
         for (final kw in bannedKeywords) {
           if (titleLower.contains(kw)) {
-            return false;
+            return true;
           }
         }
+        return false;
+      }
+
+      // Filter bertingkat:
+      // Tahap 1 (ketat): buang durasi > 10 menit (600000 ms) + keyword kompilasi.
+      // Video yang durasinya tak diketahui (0) TETAP ditampilkan.
+      final stage1 = results.where((song) {
+        if (hasBannedKeyword(song)) return false;
+        if (song.durationMs > 0 && song.durationMs > 600000) return false;
         return true;
       }).toList();
 
+      List<Song> finalSongs = stage1;
+
+      // Bila hasil tahap 1 < 5 lagu: Tahap 2 — longgarkan cap durasi jadi 15 menit (900000 ms).
+      // Filter keyword TETAP berlaku.
+      if (stage1.length < 5) {
+        final stage2 = results.where((song) {
+          if (hasBannedKeyword(song)) return false;
+          if (song.durationMs > 0 && song.durationMs > 900000) return false;
+          return true;
+        }).toList();
+        finalSongs = stage2;
+      }
+
       if (mounted) {
         setState(() {
-          _songs = filtered;
+          _songs = finalSongs;
           _isLoading = false;
         });
       }

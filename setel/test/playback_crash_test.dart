@@ -23,7 +23,7 @@ class ThrottledYouTubeService implements YouTubeService {
   ThrottledYouTubeService(this.resolveFuture);
 
   @override
-  Future<List<Song>> search(String query) async => [];
+  Future<List<Song>> search(String query, {int limit = 25}) async => [];
 
   @override
   Future<AudioStreamResult> resolveStreamUrl(String videoId,

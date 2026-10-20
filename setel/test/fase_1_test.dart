@@ -17,7 +17,7 @@ class TestYouTubeService implements YouTubeService {
   int apiCalls = 0;
 
   @override
-  Future<List<Song>> search(String query) async {
+  Future<List<Song>> search(String query, {int limit = 25}) async {
     final cleanQuery = query.trim().toLowerCase();
     final cacheBox = Hive.box<SearchCache>(BOX_SEARCH_CACHE);
     final songsBox = Hive.box<Song>(BOX_SONGS);

@@ -193,6 +193,20 @@ class LibraryServiceImpl implements LibraryService {
         : await Hive.openBox<int>(BOX_PLAY_COUNTS);
     final songsBox = Hive.box<Song>(BOX_SONGS);
 
+    // Migrasi sekali jalan: jika play_counts kosong dan history ada data, isi play_counts
+    if (playCountsBox.isEmpty && Hive.isBoxOpen(BOX_HISTORY)) {
+      final historyBox = Hive.box<HistoryEntry>(BOX_HISTORY);
+      if (historyBox.isNotEmpty) {
+        final counts = <String, int>{};
+        for (final entry in historyBox.values) {
+          counts[entry.videoId] = (counts[entry.videoId] ?? 0) + 1;
+        }
+        for (final entry in counts.entries) {
+          await playCountsBox.put(entry.key, entry.value);
+        }
+      }
+    }
+
     if (playCountsBox.isEmpty) return [];
 
     final entries = playCountsBox.toMap().entries.toList()
