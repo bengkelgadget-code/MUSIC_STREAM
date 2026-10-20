@@ -1,5 +1,6 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
+import 'package:just_audio/just_audio.dart' show ProcessingState;
 
 class SetelAudioHandler extends BaseAudioHandler
     with QueueHandler, SeekHandler {
@@ -29,12 +30,29 @@ class SetelAudioHandler extends BaseAudioHandler
     );
   }
 
+  AudioProcessingState _mapProcessingState(ProcessingState state) {
+    switch (state) {
+      case ProcessingState.idle:
+        return AudioProcessingState.idle;
+      case ProcessingState.loading:
+        return AudioProcessingState.loading;
+      case ProcessingState.buffering:
+        return AudioProcessingState.buffering;
+      case ProcessingState.ready:
+        return AudioProcessingState.ready;
+      case ProcessingState.completed:
+        return AudioProcessingState.completed;
+    }
+  }
+
   void updatePlaybackState({
     required bool isPlaying,
     required Duration position,
     required Duration duration,
-    bool isBuffering = false,
+    ProcessingState? processingState,
   }) {
+    final effectiveState = processingState ??
+        (isPlaying ? ProcessingState.ready : ProcessingState.idle);
     playbackState.add(
       playbackState.value.copyWith(
         controls: mediaItem.value == null
@@ -53,11 +71,7 @@ class SetelAudioHandler extends BaseAudioHandler
               },
         androidCompactActionIndices:
             mediaItem.value == null ? const [] : const [0, 1, 2],
-        processingState: isBuffering
-            ? AudioProcessingState.buffering
-            : (isPlaying
-                ? AudioProcessingState.ready
-                : AudioProcessingState.idle),
+        processingState: _mapProcessingState(effectiveState),
         playing: isPlaying,
         updatePosition: position,
       ),

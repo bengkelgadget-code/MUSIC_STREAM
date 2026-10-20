@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
+import 'package:just_audio/just_audio.dart' as ja;
 import 'package:setel/core/constants.dart';
 import 'package:setel/core/errors.dart';
 import 'package:setel/models/history_entry.dart';
@@ -11,8 +13,30 @@ import 'package:setel/models/playlist.dart';
 import 'package:setel/models/search_cache.dart';
 import 'package:setel/models/settings.dart';
 import 'package:setel/models/song.dart';
+import 'package:setel/services/audio_handler.dart';
 import 'package:setel/services/audio_player_service.dart';
+import 'package:setel/services/youtube_service.dart';
 import 'package:setel/state/providers.dart';
+
+class ThrottledYouTubeService implements YouTubeService {
+  final Future<Uri> resolveFuture;
+  ThrottledYouTubeService(this.resolveFuture);
+
+  @override
+  Future<List<Song>> search(String query) async => [];
+
+  @override
+  Future<Uri> resolveStreamUrl(String videoId) => resolveFuture;
+
+  @override
+  Future<Song> fetchMetadata(String videoId) async => const Song(
+        videoId: 'slow_net_1',
+        title: 'Title',
+        artist: 'Artist',
+        durationMs: 0,
+        thumbnailUrl: '',
+      );
+}
 
 class FailingAudioPlayerService implements AudioPlayerService {
   final StreamController<PlayerState> _controller =
@@ -181,6 +205,99 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 50));
       expect(capturedError, isNotNull);
       expect(capturedError.toString(), contains('Async uncaught error simulation'));
+    });
+
+    test(
+        'SetelAudioHandler.updatePlaybackState memetakan ProcessingState just_audio 1:1 ke AudioProcessingState dan TIDAK menjadi idle saat loading',
+        () {
+      final handler = SetelAudioHandler();
+
+      handler.updatePlaybackState(
+        isPlaying: true,
+        position: Duration.zero,
+        duration: const Duration(seconds: 120),
+        processingState: ja.ProcessingState.loading,
+      );
+      expect(handler.playbackState.value.processingState,
+          AudioProcessingState.loading);
+      expect(handler.playbackState.value.playing, isTrue);
+
+      handler.updatePlaybackState(
+        isPlaying: true,
+        position: Duration.zero,
+        duration: const Duration(seconds: 120),
+        processingState: ja.ProcessingState.buffering,
+      );
+      expect(handler.playbackState.value.processingState,
+          AudioProcessingState.buffering);
+
+      handler.updatePlaybackState(
+        isPlaying: true,
+        position: const Duration(seconds: 10),
+        duration: const Duration(seconds: 120),
+        processingState: ja.ProcessingState.ready,
+      );
+      expect(handler.playbackState.value.processingState,
+          AudioProcessingState.ready);
+
+      handler.updatePlaybackState(
+        isPlaying: false,
+        position: const Duration(seconds: 120),
+        duration: const Duration(seconds: 120),
+        processingState: ja.ProcessingState.completed,
+      );
+      expect(handler.playbackState.value.processingState,
+          AudioProcessingState.completed);
+
+      handler.updatePlaybackState(
+        isPlaying: false,
+        position: Duration.zero,
+        duration: Duration.zero,
+        processingState: ja.ProcessingState.idle,
+      );
+      expect(handler.playbackState.value.processingState,
+          AudioProcessingState.idle);
+    });
+
+    test(
+        'Uji Regresi FGS: AudioPlayerServiceImpl memanggil updatePlaybackState loading seketika SEBELUM resolveStreamUrl saat jaringan lambat/throttled dan aman saat mode pesawat/error',
+        () async {
+      final handler = SetelAudioHandler();
+      final completer = Completer<Uri>();
+
+      final throttledYt = ThrottledYouTubeService(completer.future);
+      final playerService = AudioPlayerServiceImpl(
+        youTubeService: throttledYt,
+        audioHandler: handler,
+      );
+
+      const song = Song(
+        videoId: 'slow_net_1',
+        title: 'Slow Network Song',
+        artist: 'Artist',
+        durationMs: 200000,
+        thumbnailUrl: 'https://example.com/thumb.jpg',
+      );
+
+      // Mulai playSong (langkah resolveStreamUrl tertahan karena completer belum selesai)
+      final playFuture = playerService.playSong(song);
+
+      // Dalam mikrodetik pertama (< 1 detik, sebelum network selesai):
+      // MediaItem & state loading HARUS sudah aktif di AudioHandler!
+      expect(handler.mediaItem.value?.id, 'slow_net_1');
+      expect(handler.mediaItem.value?.title, 'Slow Network Song');
+      expect(handler.playbackState.value.playing, isTrue);
+      expect(handler.playbackState.value.processingState,
+          AudioProcessingState.loading);
+
+      // Simulasi mode pesawat atau network gagal (misal airplane mode dinyalakan)
+      completer.completeError(AppException('Network error / mode pesawat'));
+      await expectLater(playFuture, throwsA(isA<AppException>()));
+
+      // Setelah gagal, handler harus aman kembali ke idle (tidak menggantung di foreground / tidak ANR)
+      expect(handler.playbackState.value.playing, isFalse);
+      expect(handler.playbackState.value.processingState,
+          AudioProcessingState.idle);
     });
   });
 }

@@ -133,7 +133,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         isPlaying: state.playing,
         position: _player.position,
         duration: _player.duration ?? Duration.zero,
-        isBuffering: state.processingState == ProcessingState.buffering,
+        processingState: state.processingState,
       );
     });
 
@@ -251,14 +251,16 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           : null,
     );
 
-    // Tandai buffering di audio handler agar status sinkron
+    // SEBELUM resolveStreamUrl (langkah lambat), panggil updatePlaybackState
+    // dengan processingState=loading + isPlaying=true, supaya audio_service
+    // bisa menaikkan foreground & notifikasi dalam <1 detik setelah user tap.
     _audioHandler.updatePlaybackState(
-      isPlaying: false,
+      isPlaying: true,
       position: Duration.zero,
       duration: song.durationMs > 0
           ? Duration(milliseconds: song.durationMs)
           : Duration.zero,
-      isBuffering: true,
+      processingState: ProcessingState.loading,
     );
 
     // 2. Alur: resolveStreamUrl(videoId) → cek cache → just_audio.setUrl → play → recordPlay
@@ -313,7 +315,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         isPlaying: false,
         position: Duration.zero,
         duration: Duration.zero,
-        isBuffering: false,
+        processingState: ProcessingState.idle,
       );
       throw AppException('Gagal memutar lagu: $e', e);
     }
