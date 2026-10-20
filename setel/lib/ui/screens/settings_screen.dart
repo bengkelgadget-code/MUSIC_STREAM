@@ -383,12 +383,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const Divider(color: Colors.white10),
 
           // Section 4: Tentang Aplikasi
-          _buildSectionHeader('TENTANG SETEL'),
+          _buildSectionHeader('TENTANG SON HOREK'),
           const ListTile(
             leading: Icon(Icons.info_outline, color: Colors.white70),
             title: Text('Versi Aplikasi',
                 style: TextStyle(color: Colors.white)),
-            subtitle: Text('1.0.0 (Fase 4 — Final)',
+            subtitle: Text('1.1.1+3',
                 style: TextStyle(color: Colors.white38, fontSize: 13)),
           ),
           ListTile(

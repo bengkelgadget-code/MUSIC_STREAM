@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -20,7 +22,9 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      UpdateService.checkUpdate(context, showNoUpdateToast: false);
+      if (!Platform.environment.containsKey('FLUTTER_TEST')) {
+        UpdateService.checkUpdate(context, showNoUpdateToast: false);
+      }
     });
   }
 
@@ -322,7 +326,7 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                   Icon(Icons.music_note, size: 64, color: Colors.white24),
                   SizedBox(height: 16),
                   Text(
-                    'Cari musik favoritmu di Setel',
+                    'Cari musik favoritmu di Son Horek',
                     style: TextStyle(
                       color: Colors.white70,
                       fontSize: 16,
