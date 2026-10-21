@@ -1,7 +1,7 @@
 {
-  "version_code": 15,
-  "version_name": "1.2.2",
-  "download_url": "https://github.com/bengkelgadget-code/MUSIC_STREAM/releases/download/v1.2.2/Setel.apk",
-  "changelog": "Pembaruan otomatis dari GitHub Actions versi v1.2.2.",
+  "version_code": 16,
+  "version_name": "1.2.3",
+  "download_url": "https://github.com/bengkelgadget-code/MUSIC_STREAM/releases/download/v1.2.3/Setel.apk",
+  "changelog": "Perbaikan permanen pemutaran lagu (streaming lancar tanpa jeda/terpotong di tengah lagu, dukungan seek instan tanpa error) dan optimasi chunk buffer.",
   "force_update": false
 }

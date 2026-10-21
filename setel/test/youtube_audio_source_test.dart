@@ -53,5 +53,33 @@ void main() {
         await server.close();
       }
     });
+
+    test('request streams continuous data through chunks', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((HttpRequest request) {
+        final rangeHeader = request.headers.value('range');
+        request.response.statusCode = HttpStatus.partialContent;
+        request.response.headers.set('Content-Type', 'audio/mp4');
+        request.response.headers.set('Content-Range', '$rangeHeader/10');
+        request.response.add([10, 20, 30]);
+        request.response.close();
+      });
+
+      final uri = Uri.parse('http://${server.address.host}:${server.port}/stream');
+      final source = YouTubeAudioSource(
+        uri: uri,
+        headers: {'User-Agent': 'TestUA'},
+        totalBytes: 3,
+        contentType: 'audio/mp4',
+      );
+
+      try {
+        final response = await source.request(0, 3);
+        final bytes = await response.stream.fold<List<int>>([], (prev, elem) => prev..addAll(elem));
+        expect(bytes, [10, 20, 30]);
+      } finally {
+        await server.close();
+      }
+    });
   });
 }

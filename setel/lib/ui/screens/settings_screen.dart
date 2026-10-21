@@ -141,7 +141,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   int _cacheSizeBytes = 0;
   bool _isLoadingCache = true;
-  String _appVersion = '1.2.2+15';
+  String _appVersion = '1.2.3+16';
 
   @override
   void initState() {
@@ -364,17 +364,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       (
         'Tertinggi',
         'Tertinggi (Default)',
-        'Audio-only kualitas terbaik'
+        'Kualitas audio terbaik tanpa batas'
       ),
       (
         'Seimbang',
         'Seimbang',
-        'Audio-only ≤ 128 kbps (Hemat kuota & jernih)'
+        'Format standar (Hemat kuota & suara jernih)'
       ),
       (
         'Hemat Data',
         'Hemat Data',
-        'Audio-only bitrate terendah'
+        'Bitrate terendah untuk kuota minim'
       ),
     ];
 

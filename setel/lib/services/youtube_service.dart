@@ -58,7 +58,29 @@ AudioStreamInfo selectStreamByFormat(
     case 'Tertinggi':
     default:
       list.sort((a, b) => b.bitrate.compareTo(a.bitrate));
-      return list.last;
+      return list.first;
+  }
+}
+
+MuxedStreamInfo selectMuxedStreamByFormat(
+  Iterable<MuxedStreamInfo> streams,
+  String format,
+) {
+  final list = streams.toList();
+  if (list.isEmpty) throw StateError('No muxed streams available');
+  switch (format) {
+    case 'Hemat Data':
+      list.sort((a, b) => a.bitrate.compareTo(b.bitrate));
+      return list.first;
+    case 'Seimbang':
+      list.sort((a, b) => (a.bitrate.kiloBitsPerSecond - 600)
+          .abs()
+          .compareTo((b.bitrate.kiloBitsPerSecond - 600).abs()));
+      return list.first;
+    case 'Tertinggi':
+    default:
+      list.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      return list.first;
   }
 }
 
@@ -468,6 +490,25 @@ class YouTubeServiceImpl implements YouTubeService {
           requireWatchPage: false,
           ytClients: [candidate.client],
         );
+        // Prioritaskan stream progressive muxed (MP4 itag 18) yang memiliki 'ratebypass=yes'.
+        // YouTube CDN membatasi stream DASH audio-only tanpa PO-token pada tepat 1MB (403 Forbidden).
+        // Stream muxed progressive tidak memiliki batasan 1MB, mendukung seek acak tanpa jeda,
+        // dan ExoPlayer/just_audio hanya men-decode track AAC audio-nya.
+        if (manifest.muxed.isNotEmpty) {
+          final muxedStream =
+              selectMuxedStreamByFormat(manifest.muxed, streamFormat);
+          debugPrint(
+              'Berhasil me-resolve stream muxed (ratebypass=yes) untuk videoId: $videoId '
+              'menggunakan ${candidate.name} (format: $streamFormat, tag: ${muxedStream.tag}, ${muxedStream.bitrate.kiloBitsPerSecond} kbps, ${muxedStream.size.totalBytes} bytes)');
+          return AudioStreamResult(
+            url: muxedStream.url,
+            headers: {'User-Agent': candidate.userAgent},
+            clientName: candidate.name,
+            totalBytes: muxedStream.size.totalBytes,
+            contentType: 'audio/mp4',
+          );
+        }
+
         final audioStreams = manifest.audioOnly;
         if (audioStreams.isNotEmpty) {
           final audioStream = selectStreamByFormat(audioStreams, streamFormat);
@@ -504,7 +545,7 @@ class YouTubeServiceImpl implements YouTubeService {
         ytClients: [YoutubeApiClient.androidSdkless],
       );
       if (manifest.muxed.isNotEmpty) {
-        final muxed = manifest.muxed.withHighestBitrate();
+        final muxed = selectMuxedStreamByFormat(manifest.muxed, streamFormat);
         debugPrint(
             'Fallback muxed berhasil untuk videoId: $videoId (tag: ${muxed.tag})');
         return AudioStreamResult(
@@ -516,6 +557,20 @@ class YouTubeServiceImpl implements YouTubeService {
           clientName: 'androidSdkless-muxed-fallback',
           totalBytes: muxed.size.totalBytes,
           contentType: 'audio/mp4',
+        );
+      }
+      if (manifest.audioOnly.isNotEmpty) {
+        final audio = selectStreamByFormat(manifest.audioOnly, streamFormat);
+        return AudioStreamResult(
+          url: audio.url,
+          headers: {
+            'User-Agent':
+                'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'
+          },
+          clientName: 'androidSdkless-audio-fallback',
+          totalBytes: audio.size.totalBytes,
+          contentType:
+              audio.container.name == 'webm' ? 'audio/webm' : 'audio/mp4',
         );
       }
     } catch (_) {

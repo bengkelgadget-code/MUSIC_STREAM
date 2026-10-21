@@ -90,46 +90,73 @@ class CacheServiceImpl implements CacheService {
     }
 
     // Download stream audio ke temporary file lalu rename (atomic)
-    // Gunakan HttpClient dengan Range terbatas (<= 256KB) untuk mencegah 403 Forbidden dari YouTube CDN
+    // Gunakan HttpClient dengan chunk 512KB & auto-retry untuk performa maksimal
     final tempFile = File('${cacheDir.path}/${song.videoId}.tmp');
     try {
       final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 10);
       final sink = tempFile.openWrite();
-      const chunkSize = 256 * 1024;
+      const chunkSize = 512 * 1024;
       var current = 0;
       int? totalLength;
 
       try {
         while (true) {
           final to = current + chunkSize - 1;
-          final req = await client.getUrl(streamUrl);
-          headers?.forEach((k, v) => req.headers.set(k, v));
-          req.headers.set('Range', 'bytes=$current-$to');
-          final resp = await req.close();
+          int retryCount = 0;
+          bool chunkSuccess = false;
 
-          if (resp.statusCode != 206 && resp.statusCode != 200) {
-            throw HttpException(
-                'Gagal download chunk cache: status ${resp.statusCode}');
-          }
+          while (retryCount < 3 && !chunkSuccess) {
+            try {
+              final req = await client.getUrl(streamUrl);
+              headers?.forEach((k, v) => req.headers.set(k, v));
+              req.headers.set('Range', 'bytes=$current-$to');
+              final resp = await req.close();
 
-          if (totalLength == null) {
-            final contentRange = resp.headers.value('content-range');
-            if (contentRange != null && contentRange.contains('/')) {
-              totalLength = int.tryParse(contentRange.split('/').last.trim());
+              if (resp.statusCode != 206 && resp.statusCode != 200) {
+                retryCount++;
+                if (retryCount < 3) {
+                  await Future.delayed(const Duration(milliseconds: 250));
+                  continue;
+                }
+                throw HttpException(
+                    'Gagal download chunk cache: status ${resp.statusCode}');
+              }
+
+              if (totalLength == null) {
+                final contentRange = resp.headers.value('content-range');
+                if (contentRange != null && contentRange.contains('/')) {
+                  totalLength =
+                      int.tryParse(contentRange.split('/').last.trim());
+                }
+              }
+
+              int chunkBytes = 0;
+              await for (final data in resp) {
+                sink.add(data);
+                chunkBytes += data.length;
+              }
+              current += chunkBytes;
+              chunkSuccess = true;
+
+              if (totalLength != null && current >= totalLength) {
+                break;
+              }
+              if (chunkBytes < chunkSize) {
+                break;
+              }
+            } catch (e) {
+              if (e is HttpException) rethrow;
+              retryCount++;
+              if (retryCount >= 3) rethrow;
+              await Future.delayed(const Duration(milliseconds: 250));
             }
           }
-
-          int chunkBytes = 0;
-          await for (final data in resp) {
-            sink.add(data);
-            chunkBytes += data.length;
-          }
-          current += chunkBytes;
 
           if (totalLength != null && current >= totalLength) {
             break;
           }
-          if (chunkBytes < chunkSize) {
+          if (!chunkSuccess) {
             break;
           }
         }
