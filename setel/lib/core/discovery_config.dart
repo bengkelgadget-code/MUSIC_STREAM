@@ -263,6 +263,14 @@ class DiscoveryConfigService {
 
   static const List<DiscoveryCategory> defaultHardcodedCategories = [
     DiscoveryCategory(
+      id: 'paling-sering-diputar-yt',
+      title: 'Paling Sering Diputar di YouTube',
+      group: 'INDO',
+      searchQuery: 'top hits lagu indonesia terpopuler paling sering diputar official music video',
+      iconName: 'local_fire_department',
+      gradientColors: [Color(0xFFFF9100), Color(0xFFFF5252)],
+    ),
+    DiscoveryCategory(
       id: 'top-hits-indo',
       title: 'Top Hits Indonesia',
       group: 'INDO',
@@ -325,6 +333,14 @@ class DiscoveryConfigService {
       searchQuery: 'rock indonesia official video',
       iconName: 'electric_bolt',
       gradientColors: [Color(0xFFD50000), Color(0xFF212121)],
+    ),
+    DiscoveryCategory(
+      id: 'paling-sering-diputar-global',
+      title: 'Paling Sering Diputar Global',
+      group: 'MANCA',
+      searchQuery: 'most viewed songs global billboard hits official music video',
+      iconName: 'local_fire_department',
+      gradientColors: [Color(0xFFFF1744), Color(0xFFF50057)],
     ),
     DiscoveryCategory(
       id: 'top-hits-global',

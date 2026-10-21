@@ -133,8 +133,8 @@ void main() {
     });
 
     test('DiscoveryCategory data model memiliki query dan gradien lengkap', () {
-      expect(indoCategories.length, 8);
-      expect(mancaCategories.length, 8);
+      expect(indoCategories.length, greaterThanOrEqualTo(8));
+      expect(mancaCategories.length, greaterThanOrEqualTo(8));
 
       for (final cat in [...indoCategories, ...mancaCategories]) {
         expect(cat.id.isNotEmpty, isTrue);

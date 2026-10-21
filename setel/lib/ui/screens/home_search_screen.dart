@@ -278,7 +278,30 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildSectionHeader('Paling Sering Diputar di YouTube 🔥'),
+            _buildSectionHeader(
+              'Paling Sering Diputar di YouTube 🔥',
+              onViewAll: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const DiscoveryPlaylistScreen(
+                      category: DiscoveryCategory(
+                        id: 'paling-sering-diputar-yt',
+                        title: 'Paling Sering Diputar di YouTube',
+                        group: 'INDO',
+                        searchQuery:
+                            'top hits lagu indonesia terpopuler paling sering diputar official music video',
+                        iconName: 'local_fire_department',
+                        gradientColors: [
+                          Color(0xFFFF9100),
+                          Color(0xFFFF5252),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 8),
             ListView.separated(
               shrinkWrap: true,
@@ -407,21 +430,42 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
     String title, {
     VoidCallback? onRefresh,
     bool isRefreshing = false,
+    VoidCallback? onViewAll,
+    String? viewAllText,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.2,
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.2,
+              ),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
+          if (onViewAll != null)
+            TextButton(
+              onPressed: onViewAll,
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              child: Text(
+                viewAllText ?? 'Lihat 50 Lagu',
+                style: const TextStyle(
+                  color: Color(0xFF1DB954),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
           if (onRefresh != null)
             isRefreshing
                 ? const SizedBox(

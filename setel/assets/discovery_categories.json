@@ -1,6 +1,13 @@
 {
-  "version": 1,
+  "version": 2,
   "categories": [
+    {
+      "id": "paling-sering-diputar-yt",
+      "title": "Paling Sering Diputar di YouTube",
+      "group": "INDO",
+      "query": "top hits lagu indonesia terpopuler paling sering diputar official music video",
+      "icon": "local_fire_department"
+    },
     {
       "id": "top-hits-indo",
       "title": "Top Hits Indonesia",
@@ -56,6 +63,13 @@
       "group": "INDO",
       "query": "rock indonesia official video",
       "icon": "electric_bolt"
+    },
+    {
+      "id": "paling-sering-diputar-global",
+      "title": "Paling Sering Diputar Global",
+      "group": "MANCA",
+      "query": "most viewed songs global billboard hits official music video",
+      "icon": "local_fire_department"
     },
     {
       "id": "top-hits-global",
