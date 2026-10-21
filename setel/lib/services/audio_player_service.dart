@@ -10,6 +10,7 @@ import '../core/constants.dart';
 import '../core/errors.dart';
 import '../models/history_entry.dart';
 import '../models/song.dart';
+import '../models/song_chapter.dart';
 import 'audio_handler.dart';
 import 'cache_service.dart';
 import 'library_service.dart';
@@ -28,6 +29,8 @@ class PlayerState {
   final RepeatMode repeatMode;
   final DateTime? sleepTimerEndTime;
   final bool sleepAfterCurrentTrack;
+  final List<SongChapter> chapters;
+  final int chapterIndex;
 
   const PlayerState({
     this.isPlaying = false,
@@ -39,7 +42,15 @@ class PlayerState {
     this.repeatMode = RepeatMode.off,
     this.sleepTimerEndTime,
     this.sleepAfterCurrentTrack = false,
+    this.chapters = const [],
+    this.chapterIndex = -1,
   });
+
+  bool get hasChapters => chapters.length >= 2;
+  SongChapter? get currentChapter =>
+      (hasChapters && chapterIndex >= 0 && chapterIndex < chapters.length)
+          ? chapters[chapterIndex]
+          : null;
 
   PlayerState copyWith({
     bool? isPlaying,
@@ -52,6 +63,8 @@ class PlayerState {
     DateTime? sleepTimerEndTime,
     bool? sleepAfterCurrentTrack,
     bool clearSleepTimer = false,
+    List<SongChapter>? chapters,
+    int? chapterIndex,
   }) {
     return PlayerState(
       isPlaying: isPlaying ?? this.isPlaying,
@@ -67,6 +80,8 @@ class PlayerState {
       sleepAfterCurrentTrack: clearSleepTimer
           ? false
           : (sleepAfterCurrentTrack ?? this.sleepAfterCurrentTrack),
+      chapters: chapters ?? this.chapters,
+      chapterIndex: chapterIndex ?? this.chapterIndex,
     );
   }
 }
@@ -107,10 +122,26 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   bool _shuffle = false;
   RepeatMode _repeatMode = RepeatMode.off;
   Song? _currentSong;
+  List<SongChapter> _chapters = [];
+  int _chapterIndex = -1;
 
   Timer? _sleepTimer;
   DateTime? _sleepTimerEndTime;
   bool _sleepAfterCurrentTrack = false;
+
+  int _findChapterIndex(Duration pos, List<SongChapter> chapters) {
+    if (chapters.isEmpty) return -1;
+    final posMs = pos.inMilliseconds;
+    int activeIndex = 0;
+    for (int i = 0; i < chapters.length; i++) {
+      if (posMs >= chapters[i].positionMs) {
+        activeIndex = i;
+      } else {
+        break;
+      }
+    }
+    return activeIndex;
+  }
 
   AudioPlayerServiceImpl({
     AudioPlayer? player,
@@ -139,6 +170,12 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     });
 
     _positionSub = _player.positionStream.listen((pos) {
+      if (_chapters.isNotEmpty) {
+        final newIdx = _findChapterIndex(pos, _chapters);
+        if (newIdx != _chapterIndex) {
+          _chapterIndex = newIdx;
+        }
+      }
       _emitState();
     });
 
@@ -175,6 +212,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       repeatMode: _repeatMode,
       sleepTimerEndTime: _sleepTimerEndTime,
       sleepAfterCurrentTrack: _sleepAfterCurrentTrack,
+      chapters: List.unmodifiable(_chapters),
+      chapterIndex: _chapterIndex,
     );
     _stateController.add(state);
   }
@@ -239,7 +278,22 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     if (_currentIndex < 0 || _currentIndex >= _queue.length) return;
     final song = _queue[_currentIndex];
     _currentSong = song;
+
+    // Reset chapter state untuk lagu baru
+    _chapters = [];
+    _chapterIndex = -1;
     _emitState();
+
+    // Jika lagu merupakan kompilasi (>10 menit), muat chapters secara lazy (dari cache/box dulu)
+    if (song.durationMs > 600000) {
+      unawaited(_youTubeService.getChapters(song.videoId).then((ch) {
+        if (_currentSong?.videoId == song.videoId && ch.isNotEmpty) {
+          _chapters = ch;
+          _chapterIndex = _findChapterIndex(_player.position, _chapters);
+          _emitState();
+        }
+      }).catchError((_) {}));
+    }
 
     // 1. Perbarui AudioService MediaItem
     _audioHandler.setMediaItemInfo(
@@ -375,6 +429,15 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       return;
     }
 
+    // Bila ada chapters dan belum di chapter terakhir, lompat ke chapter berikutnya
+    if (_chapters.isNotEmpty && _chapterIndex < _chapters.length - 1) {
+      final nextChapter = _chapters[_chapterIndex + 1];
+      await seek(Duration(milliseconds: nextChapter.positionMs));
+      _chapterIndex++;
+      _emitState();
+      return;
+    }
+
     if (_shuffle && _queue.length > 1) {
       int nextIdx;
       do {
@@ -396,7 +459,22 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   Future<void> previous() async {
     if (_queue.isEmpty) return;
 
-    if (_player.position > const Duration(seconds: 3)) {
+    // Bila ada chapters:
+    // bila chapterIndex > 0 -> mundur satu chapter
+    // bila chapterIndex == 0: jika posisi saat ini > 3 detik, lompat ke awal track (0);
+    // jika <= 3 detik, lanjut ke lagu sebelumnya di antrean (perilaku lama).
+    if (_chapters.isNotEmpty && _chapterIndex > 0) {
+      final prevChapter = _chapters[_chapterIndex - 1];
+      await seek(Duration(milliseconds: prevChapter.positionMs));
+      _chapterIndex--;
+      _emitState();
+      return;
+    } else if (_chapters.isNotEmpty && _chapterIndex == 0) {
+      if (_player.position > const Duration(seconds: 3)) {
+        await seek(Duration.zero);
+        return;
+      }
+    } else if (_player.position > const Duration(seconds: 3)) {
       await seek(Duration.zero);
       return;
     }
@@ -413,6 +491,10 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   Future<void> seek(Duration position) async {
     try {
       await _player.seek(position);
+      if (_chapters.isNotEmpty) {
+        _chapterIndex = _findChapterIndex(position, _chapters);
+        _emitState();
+      }
     } catch (e) {
       debugPrint(
           'Error saat seek: $e. Mencoba memulihkan pemutaran pada posisi $position...');
@@ -431,6 +513,10 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           );
           await _player.setAudioSource(audioSource, initialPosition: position);
           await _player.play();
+          if (_chapters.isNotEmpty) {
+            _chapterIndex = _findChapterIndex(position, _chapters);
+            _emitState();
+          }
         } catch (_) {
           throw AppException('Gagal mempercepat lagu: $e', e);
         }

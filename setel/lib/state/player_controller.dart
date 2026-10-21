@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/errors.dart';
 import '../models/song.dart';
+import '../models/song_chapter.dart';
 import '../services/audio_player_service.dart';
 import 'providers.dart';
 
@@ -19,6 +20,8 @@ class PlayerControllerState {
   final DateTime? sleepTimerEndTime;
   final bool sleepAfterCurrentTrack;
   final String? playbackError;
+  final List<SongChapter> chapters;
+  final int chapterIndex;
 
   const PlayerControllerState({
     this.currentSong,
@@ -31,7 +34,15 @@ class PlayerControllerState {
     this.sleepTimerEndTime,
     this.sleepAfterCurrentTrack = false,
     this.playbackError,
+    this.chapters = const [],
+    this.chapterIndex = -1,
   });
+
+  bool get hasChapters => chapters.length >= 2;
+  SongChapter? get currentChapter =>
+      (hasChapters && chapterIndex >= 0 && chapterIndex < chapters.length)
+          ? chapters[chapterIndex]
+          : null;
 
   PlayerControllerState copyWith({
     Song? currentSong,
@@ -46,6 +57,8 @@ class PlayerControllerState {
     bool clearSleepTimer = false,
     String? playbackError,
     bool clearPlaybackError = false,
+    List<SongChapter>? chapters,
+    int? chapterIndex,
   }) {
     return PlayerControllerState(
       currentSong: currentSong ?? this.currentSong,
@@ -64,6 +77,8 @@ class PlayerControllerState {
       playbackError: clearPlaybackError
           ? null
           : (playbackError ?? this.playbackError),
+      chapters: chapters ?? this.chapters,
+      chapterIndex: chapterIndex ?? this.chapterIndex,
     );
   }
 }
@@ -88,6 +103,10 @@ class PlayerController extends Notifier<PlayerControllerState> {
         repeatMode: playerState.repeatMode,
         sleepTimerEndTime: playerState.sleepTimerEndTime,
         sleepAfterCurrentTrack: playerState.sleepAfterCurrentTrack,
+        clearSleepTimer: playerState.sleepTimerEndTime == null &&
+            !playerState.sleepAfterCurrentTrack,
+        chapters: playerState.chapters,
+        chapterIndex: playerState.chapterIndex,
       );
     });
 

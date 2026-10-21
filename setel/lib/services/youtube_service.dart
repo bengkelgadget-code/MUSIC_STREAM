@@ -9,6 +9,7 @@ import '../core/constants.dart';
 import '../core/errors.dart';
 import '../models/search_cache.dart';
 import '../models/song.dart';
+import '../models/song_chapter.dart';
 
 int parseIso8601Duration(String isoDuration) {
   if (isoDuration.isEmpty) return 0;
@@ -34,6 +35,63 @@ int parseDurationString(String? dur) {
     return (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
   }
   return 0;
+}
+
+List<SongChapter> parseChaptersFromDescription(String description) {
+  if (description.isEmpty) return [];
+
+  final lines = description.split('\n');
+  final rawChapters = <SongChapter>[];
+
+  // Regex matching timestamp format mm:ss and hh:mm:ss
+  // Mendukung: "00:00 Judul", "3:42 - Judul Lagu", "1:02:15 | Judul", "[03:45]", "(12:34)"
+  final timeRegex =
+      RegExp(r'(?:^|[\s\[\(])(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?:[\s\]\)]|$)');
+
+  for (final rawLine in lines) {
+    final line = rawLine.trim();
+    if (line.isEmpty) continue;
+
+    final match = timeRegex.firstMatch(line);
+    if (match == null) continue;
+
+    final hoursStr = match.group(1);
+    final minutesStr = match.group(2);
+    final secondsStr = match.group(3);
+
+    final hours = hoursStr != null ? int.tryParse(hoursStr) ?? 0 : 0;
+    final minutes = minutesStr != null ? int.tryParse(minutesStr) ?? 0 : 0;
+    final seconds = secondsStr != null ? int.tryParse(secondsStr) ?? 0 : 0;
+
+    final positionMs = ((hours * 3600) + (minutes * 60) + seconds) * 1000;
+
+    // Ambil timestamp PERTAMA per baris; teks setelahnya jadi judul chapter
+    final textAfter = line.substring(match.end);
+    final cleanTitle = textAfter
+        .replaceFirst(RegExp(r'^[\s\-\–\—\:\|\•\.\)\]]+'), '')
+        .trim();
+
+    if (cleanTitle.isNotEmpty) {
+      rawChapters.add(SongChapter(title: cleanTitle, positionMs: positionMs));
+    }
+  }
+
+  // Urutkan menaik berdasarkan positionMs
+  rawChapters.sort((a, b) => a.positionMs.compareTo(b.positionMs));
+
+  // Buang duplikat posisi
+  final uniqueChapters = <SongChapter>[];
+  final seenPositions = <int>{};
+  for (final ch in rawChapters) {
+    if (seenPositions.add(ch.positionMs)) {
+      uniqueChapters.add(ch);
+    }
+  }
+
+  // Kembalikan list KOSONG bila chapter valid < 2 (bukan kompilasi ber-chapter)
+  if (uniqueChapters.length < 2) return [];
+
+  return uniqueChapters;
 }
 
 AudioStreamInfo selectStreamByFormat(
@@ -130,6 +188,9 @@ abstract class YouTubeService {
 
   /// Ambil saran pencarian dari endpoint YouTube Suggest API (maksimal 8 saran).
   Future<List<String>> getSuggestions(String query);
+
+  /// Ambil daftar chapter dari deskripsi video YouTube (cache 24 jam).
+  Future<List<SongChapter>> getChapters(String videoId);
 
   /// Metadata cadangan via iTunes Search API (tanpa key), dipakai jika perlu.
   Future<Song> fetchMetadata(String videoId);
@@ -582,6 +643,56 @@ class YouTubeServiceImpl implements YouTubeService {
       'Gagal memuat stream audio untuk video $videoId: $lastError',
       lastError,
     );
+  }
+
+  @override
+  Future<List<SongChapter>> getChapters(String videoId) async {
+    final cleanId = videoId.trim();
+    if (cleanId.isEmpty) return [];
+
+    // 1. Cek cache Hive song_chapters (TTL 24 jam)
+    if (Hive.isBoxOpen(BOX_SONG_CHAPTERS)) {
+      final box = Hive.box(BOX_SONG_CHAPTERS);
+      final cached = box.get(cleanId);
+      if (cached is Map) {
+        final fetchedAt = cached['fetchedAt'] as int?;
+        final rawChapters = cached['chapters'];
+        if (fetchedAt != null && rawChapters is List) {
+          final isExpired = DateTime.now().millisecondsSinceEpoch - fetchedAt >
+              24 * 3600 * 1000;
+          if (!isExpired) {
+            return rawChapters
+                .whereType<Map>()
+                .map((m) => SongChapter.fromMap(m))
+                .toList();
+          }
+        }
+      }
+    }
+
+    // 2. Fetch deskripsi video via youtube_explode
+    final yt = YoutubeExplode();
+    try {
+      final video = await yt.videos.get(cleanId);
+      final description = video.description;
+      final chapters = parseChaptersFromDescription(description);
+
+      // 3. Simpan ke cache box song_chapters
+      if (Hive.isBoxOpen(BOX_SONG_CHAPTERS)) {
+        final box = Hive.box(BOX_SONG_CHAPTERS);
+        await box.put(cleanId, {
+          'fetchedAt': DateTime.now().millisecondsSinceEpoch,
+          'chapters': chapters.map((c) => c.toMap()).toList(),
+        });
+      }
+
+      return chapters;
+    } catch (e) {
+      debugPrint('Gagal mengambil chapter video $videoId: $e');
+      return [];
+    } finally {
+      yt.close();
+    }
   }
 
   @override

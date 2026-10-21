@@ -78,6 +78,14 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         ),
         centerTitle: true,
         actions: [
+          if (playerState.hasChapters)
+            IconButton(
+              icon: const Icon(Icons.format_list_bulleted),
+              tooltip: 'Bagian-bagian Lagu',
+              onPressed: () {
+                _showChaptersBottomSheet(context, playerState, controller);
+              },
+            ),
           IconButton(
             icon: Icon(
               isSleepTimerActive
@@ -183,6 +191,44 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                             color: Colors.white60,
                           ),
                         ),
+                        if (playerState.hasChapters &&
+                            playerState.currentChapter != null) ...[
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1DB954)
+                                      .withValues(alpha: 0.18),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  'Bab ${playerState.chapterIndex + 1}/${playerState.chapters.length}',
+                                  style: const TextStyle(
+                                    color: Color(0xFF1DB954),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  playerState.currentChapter!.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: Color(0xFF1DB954),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -344,6 +390,127 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  void _showChaptersBottomSheet(
+    BuildContext context,
+    PlayerControllerState playerState,
+    dynamic controller,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.55,
+          minChildSize: 0.3,
+          maxChildSize: 0.85,
+          expand: false,
+          builder: (context, scrollController) {
+            return Column(
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(top: 12, bottom: 8),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.format_list_bulleted,
+                          color: Color(0xFF1DB954), size: 22),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Bagian-bagian Lagu (${playerState.chapters.length})',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(color: Colors.white10),
+                Expanded(
+                  child: ListView.builder(
+                    controller: scrollController,
+                    itemCount: playerState.chapters.length,
+                    itemBuilder: (context, index) {
+                      final ch = playerState.chapters[index];
+                      final isActive = index == playerState.chapterIndex;
+
+                      return ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 2),
+                        leading: Container(
+                          width: 32,
+                          height: 32,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: isActive
+                                ? const Color(0xFF1DB954).withValues(alpha: 0.2)
+                                : Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Text(
+                            '${index + 1}',
+                            style: TextStyle(
+                              color: isActive
+                                  ? const Color(0xFF1DB954)
+                                  : Colors.white70,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        title: Text(
+                          ch.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: isActive
+                                ? const Color(0xFF1DB954)
+                                : Colors.white,
+                            fontWeight:
+                                isActive ? FontWeight.bold : FontWeight.w500,
+                            fontSize: 14,
+                          ),
+                        ),
+                        trailing: Text(
+                          formatDurationMs(ch.positionMs),
+                          style: TextStyle(
+                            color: isActive
+                                ? const Color(0xFF1DB954)
+                                : Colors.white38,
+                            fontSize: 12,
+                          ),
+                        ),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          controller.seek(
+                              Duration(milliseconds: ch.positionMs));
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

@@ -13,6 +13,7 @@ import 'package:setel/models/playlist.dart';
 import 'package:setel/models/search_cache.dart';
 import 'package:setel/models/settings.dart';
 import 'package:setel/models/song.dart';
+import 'package:setel/models/song_chapter.dart';
 import 'package:setel/services/audio_handler.dart';
 import 'package:setel/services/audio_player_service.dart';
 import 'package:setel/services/youtube_service.dart';
@@ -32,6 +33,9 @@ class ThrottledYouTubeService implements YouTubeService {
 
   @override
   Future<List<String>> getSuggestions(String query) async => [];
+
+  @override
+  Future<List<SongChapter>> getChapters(String videoId) async => [];
 
   @override
   Future<Song> fetchMetadata(String videoId) async => const Song(

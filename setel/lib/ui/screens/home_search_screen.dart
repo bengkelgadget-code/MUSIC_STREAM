@@ -22,15 +22,47 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
   final TextEditingController _textController = TextEditingController();
   Timer? _debounceTimer;
   List<String> _suggestions = [];
+  late Future<List<DiscoveryCategory>> _categoriesFuture;
+  bool _isRefreshingCategories = false;
 
   @override
   void initState() {
     super.initState();
+    _categoriesFuture = DiscoveryConfigService().getCategories();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!Platform.environment.containsKey('FLUTTER_TEST')) {
         UpdateService.checkUpdate(context, showNoUpdateToast: false);
       }
     });
+  }
+
+  Future<void> _refreshCategories() async {
+    setState(() {
+      _isRefreshingCategories = true;
+    });
+    try {
+      final updated =
+          await DiscoveryConfigService().getCategories(forceRefresh: true);
+      if (mounted) {
+        setState(() {
+          _categoriesFuture = Future.value(updated);
+          _isRefreshingCategories = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Kategori playlist berhasil diperbarui'),
+            backgroundColor: Color(0xFF282828),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isRefreshingCategories = false;
+        });
+      }
+    }
   }
 
   @override
@@ -304,67 +336,112 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
   }
 
   Widget _buildDiscoverySection() {
-    return ListView(
-      padding: const EdgeInsets.only(top: 16, bottom: 80),
-      children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Text(
-            'Cari musik favoritmu di Setel',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.2,
+    return FutureBuilder<List<DiscoveryCategory>>(
+      future: _categoriesFuture,
+      builder: (context, snapshot) {
+        final allCategories = snapshot.data ?? const [];
+        final indo = allCategories.where((c) => c.group == 'INDO').toList();
+        final manca = allCategories.where((c) => c.group == 'MANCA').toList();
+
+        return ListView(
+          padding: const EdgeInsets.only(top: 16, bottom: 80),
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Text(
+                'Cari musik favoritmu di Setel',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.2,
+                ),
+              ),
             ),
-          ),
-        ),
-        _buildSectionHeader('Playlist Indo Terbaik 🇮🇩'),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 120,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: indoCategories.length,
-            separatorBuilder: (context, index) => const SizedBox(width: 12),
-            itemBuilder: (context, index) {
-              return _DiscoveryCategoryCard(category: indoCategories[index]);
-            },
-          ),
-        ),
-        const SizedBox(height: 28),
-        _buildSectionHeader('Playlist Manca Terbaik 🌍'),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 120,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: mancaCategories.length,
-            separatorBuilder: (context, index) => const SizedBox(width: 12),
-            itemBuilder: (context, index) {
-              return _DiscoveryCategoryCard(category: mancaCategories[index]);
-            },
-          ),
-        ),
-        const SizedBox(height: 28),
-        _buildTrendingSection(),
-      ],
+            _buildSectionHeader(
+              'Playlist Indo Terbaik 🇮🇩',
+              onRefresh: _refreshCategories,
+              isRefreshing: _isRefreshingCategories,
+            ),
+            const SizedBox(height: 12),
+            if (indo.isNotEmpty)
+              SizedBox(
+                height: 120,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: indo.length,
+                  separatorBuilder: (context, index) =>
+                      const SizedBox(width: 12),
+                  itemBuilder: (context, index) {
+                    return _DiscoveryCategoryCard(category: indo[index]);
+                  },
+                ),
+              ),
+            const SizedBox(height: 28),
+            _buildSectionHeader('Playlist Manca Terbaik 🌍'),
+            const SizedBox(height: 12),
+            if (manca.isNotEmpty)
+              SizedBox(
+                height: 120,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: manca.length,
+                  separatorBuilder: (context, index) =>
+                      const SizedBox(width: 12),
+                  itemBuilder: (context, index) {
+                    return _DiscoveryCategoryCard(category: manca[index]);
+                  },
+                ),
+              ),
+            const SizedBox(height: 28),
+            _buildTrendingSection(),
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildSectionHeader(String title) {
+  Widget _buildSectionHeader(
+    String title, {
+    VoidCallback? onRefresh,
+    bool isRefreshing = false,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0),
-      child: Text(
-        title,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 0.2,
-        ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.2,
+            ),
+          ),
+          if (onRefresh != null)
+            isRefreshing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor:
+                          AlwaysStoppedAnimation<Color>(Color(0xFF1DB954)),
+                    ),
+                  )
+                : IconButton(
+                    icon: const Icon(Icons.refresh,
+                        color: Colors.white60, size: 20),
+                    tooltip: 'Perbarui Kategori',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: onRefresh,
+                  ),
+        ],
       ),
     );
   }

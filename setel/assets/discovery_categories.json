@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "categories": [
+    {
+      "id": "top-hits-indo",
+      "title": "Top Hits Indonesia",
+      "group": "INDO",
+      "query": "lagu pop indonesia terbaru official video",
+      "icon": "trending_up"
+    },
+    {
+      "id": "lagu-indo-terbaru",
+      "title": "Lagu Indonesia Terbaru",
+      "group": "INDO",
+      "query": "lagu baru indonesia official music video",
+      "icon": "new_releases_outlined"
+    },
+    {
+      "id": "pop-indo",
+      "title": "Pop Indonesia",
+      "group": "INDO",
+      "query": "pop indonesia hits official music video",
+      "icon": "music_note"
+    },
+    {
+      "id": "dangdut-koplo",
+      "title": "Dangdut Koplo Hits",
+      "group": "INDO",
+      "query": "dangdut koplo terbaru official music video",
+      "icon": "celebration"
+    },
+    {
+      "id": "indie-indo",
+      "title": "Indie Indonesia",
+      "group": "INDO",
+      "query": "indie indonesia lagu official music video",
+      "icon": "coffee"
+    },
+    {
+      "id": "galau-indo",
+      "title": "Lagu Galau Indonesia",
+      "group": "INDO",
+      "query": "lagu galau indonesia official music video",
+      "icon": "favorite_border"
+    },
+    {
+      "id": "nostalgia-2000",
+      "title": "Nostalgia Indonesia 2000-an",
+      "group": "INDO",
+      "query": "lagu indonesia 2000an hits official audio",
+      "icon": "history"
+    },
+    {
+      "id": "rock-indo",
+      "title": "Rock Indonesia",
+      "group": "INDO",
+      "query": "rock indonesia official video",
+      "icon": "electric_bolt"
+    },
+    {
+      "id": "top-hits-global",
+      "title": "Top Hits Global",
+      "group": "MANCA",
+      "query": "top hits global official music video",
+      "icon": "public"
+    },
+    {
+      "id": "lagu-barat-terbaru",
+      "title": "Lagu Barat Terbaru",
+      "group": "MANCA",
+      "query": "new english songs official music video",
+      "icon": "flash_on"
+    },
+    {
+      "id": "pop-barat",
+      "title": "Pop Barat",
+      "group": "MANCA",
+      "query": "pop songs official music video",
+      "icon": "audiotrack"
+    },
+    {
+      "id": "kpop-hits",
+      "title": "K-Pop Hits",
+      "group": "MANCA",
+      "query": "kpop latest official music video",
+      "icon": "star_border"
+    },
+    {
+      "id": "edm-dance",
+      "title": "EDM & Dance Hits",
+      "group": "MANCA",
+      "query": "edm dance hits official music video",
+      "icon": "speaker"
+    },
+    {
+      "id": "hiphop-rnb",
+      "title": "Hip-Hop & R&B",
+      "group": "MANCA",
+      "query": "hip hop rnb hits official music video",
+      "icon": "headset_mic"
+    },
+    {
+      "id": "rock-legendaris",
+      "title": "Rock Legendaris",
+      "group": "MANCA",
+      "query": "classic rock hits official video",
+      "icon": "album"
+    },
+    {
+      "id": "akustik-santai",
+      "title": "Akustik Santai",
+      "group": "MANCA",
+      "query": "acoustic guitar chill official audio",
+      "icon": "spa"
+    }
+  ]
+}

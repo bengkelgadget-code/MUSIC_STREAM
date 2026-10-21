@@ -111,6 +111,24 @@ class SongTile extends StatelessWidget {
               ),
             ),
           ],
+          if (song.durationMs > 600000) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                'Kompilasi',
+                style: TextStyle(
+                  color: Colors.amber,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
           if (song.durationMs > 0) ...[
             const SizedBox(width: 8),
             Text(

@@ -45,60 +45,9 @@ class _DiscoveryPlaylistScreenState
       final results =
           await ytService.search(widget.category.searchQuery, limit: 50);
 
-      const bannedKeywords = [
-        'full album',
-        'kompilasi',
-        'nonstop',
-        'non stop',
-        '1 jam',
-        '2 jam',
-        '3 jam',
-        '24 jam',
-        'spotify',
-        'playlist',
-        'kumpulan lagu',
-        'kumpulan musik',
-        'lagu santai viral',
-        'top 100',
-        'top 50',
-        'mix lagu',
-        'remix nonstop',
-      ];
-
-      bool hasBannedKeyword(Song song) {
-        final titleLower = song.title.toLowerCase();
-        for (final kw in bannedKeywords) {
-          if (titleLower.contains(kw)) {
-            return true;
-          }
-        }
-        return false;
-      }
-
-      // Filter bertingkat:
-      // Tahap 1 (ketat): buang durasi > 10 menit (600000 ms) + keyword kompilasi.
-      final stage1 = results.where((song) {
-        if (hasBannedKeyword(song)) return false;
-        if (song.durationMs > 0 && song.durationMs > 600000) return false;
-        return true;
-      }).toList();
-
-      List<Song> finalSongs = stage1;
-
-      // Bila hasil tahap 1 < 5 lagu: Tahap 2 — longgarkan cap durasi jadi 15 menit (900000 ms).
-      // Filter keyword TETAP berlaku.
-      if (stage1.length < 5) {
-        final stage2 = results.where((song) {
-          if (hasBannedKeyword(song)) return false;
-          if (song.durationMs > 0 && song.durationMs > 900000) return false;
-          return true;
-        }).toList();
-        finalSongs = stage2;
-      }
-
       if (mounted) {
         setState(() {
-          _songs = finalSongs;
+          _songs = results;
           _isLoading = false;
         });
       }

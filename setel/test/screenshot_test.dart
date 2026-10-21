@@ -15,6 +15,7 @@ import 'package:setel/models/playlist.dart';
 import 'package:setel/models/search_cache.dart';
 import 'package:setel/models/settings.dart';
 import 'package:setel/models/song.dart';
+import 'package:setel/models/song_chapter.dart';
 import 'package:setel/services/audio_player_service.dart';
 import 'package:setel/services/youtube_service.dart';
 import 'package:setel/state/providers.dart';
@@ -29,6 +30,8 @@ class DummyYouTubeService implements YouTubeService {
           url: Uri.parse('https://example.com/audio.m4a'), headers: {});
   @override
   Future<List<String>> getSuggestions(String query) async => [];
+  @override
+  Future<List<SongChapter>> getChapters(String videoId) async => [];
   @override
   Future<Song> fetchMetadata(String videoId) async => const Song(
         videoId: 's1',
