@@ -23,12 +23,17 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
   Timer? _debounceTimer;
   List<String> _suggestions = [];
   late Future<List<DiscoveryCategory>> _categoriesFuture;
+  late Future<List<Song>> _trendingFuture;
   bool _isRefreshingCategories = false;
 
   @override
   void initState() {
     super.initState();
     _categoriesFuture = DiscoveryConfigService().getCategories();
+    _trendingFuture = ref.read(youtubeServiceProvider).search(
+          'top hits lagu indonesia terpopuler paling sering diputar official music video',
+          limit: 50,
+        );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!Platform.environment.containsKey('FLUTTER_TEST')) {
         UpdateService.checkUpdate(context, showNoUpdateToast: false);
@@ -43,9 +48,14 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
     try {
       final updated =
           await DiscoveryConfigService().getCategories(forceRefresh: true);
+      final freshTrending = await ref.read(youtubeServiceProvider).search(
+            'top hits lagu indonesia terpopuler paling sering diputar official music video',
+            limit: 50,
+          );
       if (mounted) {
         setState(() {
           _categoriesFuture = Future.value(updated);
+          _trendingFuture = Future.value(freshTrending);
           _isRefreshingCategories = false;
         });
         ScaffoldMessenger.of(context).showSnackBar(
@@ -237,16 +247,10 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
   }
 
   Widget _buildTrendingSection() {
-    final ytService = ref.read(youtubeServiceProvider);
-
     return FutureBuilder<List<Song>>(
-      future: ytService
-          .search('lagu pop indonesia terbaru official video', limit: 15),
+      future: _trendingFuture,
       builder: (context, snapshot) {
-        final trendingSongs = (snapshot.data ?? [])
-            .where((s) => s.durationMs > 0 && s.durationMs <= 600000)
-            .take(10)
-            .toList();
+        final trendingSongs = (snapshot.data ?? []).take(50).toList();
 
         if (trendingSongs.isEmpty) {
           if (snapshot.connectionState == ConnectionState.waiting) {
