@@ -61,7 +61,7 @@
       "id": "top-hits-global",
       "title": "Top Hits Global",
       "group": "MANCA",
-      "query": "top hits global official music video",
+      "query": "billboard hot 100 official music video",
       "icon": "public"
     },
     {
@@ -75,7 +75,7 @@
       "id": "pop-barat",
       "title": "Pop Barat",
       "group": "MANCA",
-      "query": "pop songs official music video",
+      "query": "top pop hits english official music video",
       "icon": "audiotrack"
     },
     {
