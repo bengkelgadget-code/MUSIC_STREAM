@@ -40,7 +40,12 @@ int parseDurationString(String? dur) {
 List<SongChapter> parseChaptersFromDescription(String description) {
   if (description.isEmpty) return [];
 
-  final lines = description.split('\n');
+  // Normalisasi karakter baris baru: dukung newline asli (\n, \r\n) maupun literal escaped (\n)
+  final normalized = description
+      .replaceAll(r'\r\n', '\n')
+      .replaceAll(r'\n', '\n')
+      .replaceAll('\r\n', '\n');
+  final lines = normalized.split('\n');
   final rawChapters = <SongChapter>[];
 
   // Regex matching timestamp format mm:ss and hh:mm:ss
@@ -65,11 +70,18 @@ List<SongChapter> parseChaptersFromDescription(String description) {
 
     final positionMs = ((hours * 3600) + (minutes * 60) + seconds) * 1000;
 
-    // Ambil timestamp PERTAMA per baris; teks setelahnya jadi judul chapter
+    // Ambil timestamp; teks setelahnya atau sebelumnya jadi judul chapter
     final textAfter = line.substring(match.end);
-    final cleanTitle = textAfter
+    String cleanTitle = textAfter
         .replaceFirst(RegExp(r'^[\s\-\–\—\:\|\•\.\)\]]+'), '')
         .trim();
+    if (cleanTitle.isEmpty) {
+      final textBefore = line.substring(0, match.start);
+      cleanTitle = textBefore
+          .replaceFirst(RegExp(r'[\s\-\–\—\:\|\•\.\(\[]+$'), '')
+          .replaceFirst(RegExp(r'^\d+[\.\)]\s*'), '')
+          .trim();
+    }
 
     if (cleanTitle.isNotEmpty) {
       rawChapters.add(SongChapter(title: cleanTitle, positionMs: positionMs));

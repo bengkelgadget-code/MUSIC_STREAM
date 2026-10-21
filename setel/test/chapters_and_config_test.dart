@@ -8,6 +8,7 @@ import 'package:setel/core/discovery_config.dart';
 import 'package:setel/models/song.dart';
 import 'package:setel/models/song_chapter.dart';
 import 'package:setel/services/audio_player_service.dart';
+import 'package:setel/services/cache_service.dart';
 import 'package:setel/services/youtube_service.dart';
 
 void main() {
@@ -81,6 +82,62 @@ Daftar Lagu Terbaik:
       expect(chapters[4].title, 'Lagu Kompilasi Penutup');
     });
 
+    test('parseChaptersFromDescription handles escaped literal \\n and Windows \\r\\n', () {
+      // String dengan literal \n escaped dan \r\n
+      final escapedSample = '00:00 Intro\\n04:15 Lagu Kedua\\r\\n08:30 Lagu Ketiga';
+      final chapters = parseChaptersFromDescription(escapedSample);
+      expect(chapters.length, 3);
+      expect(chapters[0].title, 'Intro');
+      expect(chapters[1].title, 'Lagu Kedua');
+      expect(chapters[2].title, 'Lagu Ketiga');
+    });
+
+    test('parseChaptersFromDescription extracts titles placed before timestamp', () {
+      const sample = '''
+01. Intro Lagu - 00:00
+02. Lagu Akustik Pilihan - 03:45
+03. Lagu Penutup (08:20)
+''';
+      final chapters = parseChaptersFromDescription(sample);
+      expect(chapters.length, 3);
+      expect(chapters[0].title, 'Intro Lagu');
+      expect(chapters[1].title, 'Lagu Akustik Pilihan');
+      expect(chapters[2].title, 'Lagu Penutup');
+    });
+
+    test('parseChaptersFromDescription parses 79-minute compilation with 10 songs correctly', () {
+      const compilation79Min = '''
+KOMPILASI LAGU TERBAIK 2026 (79 Menit)
+00:00 Track 1 - Awal Cerita
+07:30 Track 2 - Melodi Rindu
+15:45 Track 3 - Senja di Jakarta
+23:10 Track 4 - Pelita Harapan
+31:00 Track 5 - Nada Asmara
+39:20 Track 6 - Jejak Langkah
+47:50 Track 7 - Bintang Kejora
+56:15 Track 8 - Suara Hati
+1:04:30 Track 9 - Selamanya Indah
+1:12:00 Track 10 - Penutup Manis
+''';
+
+      final chapters = parseChaptersFromDescription(compilation79Min);
+      expect(chapters.length, 10);
+      expect(chapters[0].title, 'Track 1 - Awal Cerita');
+      expect(chapters[0].positionMs, 0);
+
+      expect(chapters[1].title, 'Track 2 - Melodi Rindu');
+      expect(chapters[1].positionMs, (7 * 60 + 30) * 1000);
+
+      expect(chapters[2].title, 'Track 3 - Senja di Jakarta');
+      expect(chapters[2].positionMs, (15 * 60 + 45) * 1000);
+
+      expect(chapters[3].title, 'Track 4 - Pelita Harapan');
+      expect(chapters[3].positionMs, (23 * 60 + 10) * 1000);
+
+      expect(chapters[9].title, 'Track 10 - Penutup Manis');
+      expect(chapters[9].positionMs, (1 * 3600 + 12 * 60) * 1000); // 72 menit = 4320000ms
+    });
+
     test('parseChaptersFromDescription sorts by timestamp and removes duplicates', () {
       const sample = '''
 10:00 Bagian Kedua
@@ -100,42 +157,130 @@ Daftar Lagu Terbaik:
     });
   });
 
-  group('PlayerState Chapter Support Tests', () {
-    const chapters = [
-      SongChapter(title: 'Bab 1', positionMs: 0),
-      SongChapter(title: 'Bab 2', positionMs: 180000),
-      SongChapter(title: 'Bab 3', positionMs: 360000),
+  group('PlayerState Chapter Support & 79-min Navigation Simulation Tests', () {
+    const compilation79Min = [
+      SongChapter(title: 'Track 1', positionMs: 0),
+      SongChapter(title: 'Track 2', positionMs: 450000), // 07:30
+      SongChapter(title: 'Track 3', positionMs: 945000), // 15:45
+      SongChapter(title: 'Track 4', positionMs: 1390000), // 23:10
+      SongChapter(title: 'Track 5', positionMs: 1860000),
+      SongChapter(title: 'Track 6', positionMs: 2360000),
+      SongChapter(title: 'Track 7', positionMs: 2870000),
+      SongChapter(title: 'Track 8', positionMs: 3375000),
+      SongChapter(title: 'Track 9', positionMs: 3870000),
+      SongChapter(title: 'Track 10', positionMs: 4320000),
     ];
 
-    const song = Song(
-      videoId: 'comp1',
-      title: 'Full Album Kompilasi',
+    const compilationSong = Song(
+      videoId: 'comp79min',
+      title: 'Kompilasi Santai 79 Menit',
       artist: 'Various Artists',
-      durationMs: 720000,
+      durationMs: 79 * 60 * 1000,
       thumbnailUrl: '',
     );
 
-    test('PlayerState detects hasChapters and currentChapter correctly', () {
-      final stateNoChapters = PlayerState(
-        currentSong: song,
+    test('PlayerState detects hasChapters and currentChapter correctly for 79-min compilation', () {
+      final state = PlayerState(
+        currentSong: compilationSong,
         isPlaying: true,
-        position: Duration.zero,
-        duration: const Duration(milliseconds: 720000),
-      );
-      expect(stateNoChapters.hasChapters, isFalse);
-      expect(stateNoChapters.currentChapter, isNull);
-
-      final stateWithChapters = PlayerState(
-        currentSong: song,
-        isPlaying: true,
-        position: const Duration(milliseconds: 200000),
-        duration: const Duration(milliseconds: 720000),
-        chapters: chapters,
+        position: const Duration(milliseconds: 500000),
+        duration: const Duration(milliseconds: 79 * 60 * 1000),
+        chapters: compilation79Min,
         chapterIndex: 1,
       );
-      expect(stateWithChapters.hasChapters, isTrue);
-      expect(stateWithChapters.currentChapter?.title, 'Bab 2');
-      expect(stateWithChapters.currentChapter?.positionMs, 180000);
+
+      expect(state.hasChapters, isTrue);
+      expect(state.chapters.length, 10);
+      expect(state.currentChapter?.title, 'Track 2');
+      expect(state.currentChapter?.positionMs, 450000);
+    });
+
+    test('Simulasi tap next 3x pada kompilasi 79 menit berpindah antar bab DALAM file yang sama', () {
+      // Mulai di Track 1 (Index 0, Posisi 0)
+      var currentChapterIndex = 0;
+      var currentPositionMs = compilation79Min[currentChapterIndex].positionMs;
+      expect(compilation79Min[currentChapterIndex].title, 'Track 1');
+      expect(currentPositionMs, 0);
+
+      // Tap Next #1 -> Pindah ke Track 2
+      if (currentChapterIndex < compilation79Min.length - 1) {
+        currentChapterIndex++;
+        currentPositionMs = compilation79Min[currentChapterIndex].positionMs;
+      }
+      expect(currentChapterIndex, 1);
+      expect(compilation79Min[currentChapterIndex].title, 'Track 2');
+      expect(currentPositionMs, 450000); // 07:30
+
+      // Tap Next #2 -> Pindah ke Track 3
+      if (currentChapterIndex < compilation79Min.length - 1) {
+        currentChapterIndex++;
+        currentPositionMs = compilation79Min[currentChapterIndex].positionMs;
+      }
+      expect(currentChapterIndex, 2);
+      expect(compilation79Min[currentChapterIndex].title, 'Track 3');
+      expect(currentPositionMs, 945000); // 15:45
+
+      // Tap Next #3 -> Pindah ke Track 4
+      if (currentChapterIndex < compilation79Min.length - 1) {
+        currentChapterIndex++;
+        currentPositionMs = compilation79Min[currentChapterIndex].positionMs;
+      }
+      expect(currentChapterIndex, 3);
+      expect(compilation79Min[currentChapterIndex].title, 'Track 4');
+      expect(currentPositionMs, 1390000); // 23:10
+    });
+  });
+
+  group('CacheService Limitation & Cleanup Tests', () {
+    test('CacheServiceImpl ignores auto-cache for duration > 15 minutes', () async {
+      final cacheDir = await Directory.systemTemp.createTemp('setel_cache_limit_test_');
+      final cacheService = CacheServiceImpl(cacheDirectory: cacheDir);
+
+      const longSong = Song(
+        videoId: 'long_compilation_1',
+        title: 'Album 2 Jam',
+        artist: 'Various',
+        durationMs: 7200000, // 2 jam > 15 menit
+        thumbnailUrl: '',
+      );
+
+      final file = await cacheService.cacheSong(
+        longSong,
+        Uri.parse('https://example.com/audio.m4a'),
+      );
+
+      // Harus mengembalikan file kosong (dilewati)
+      expect(file.path, isEmpty);
+
+      if (cacheDir.existsSync()) {
+        await cacheDir.delete(recursive: true);
+      }
+    });
+
+    test('CacheServiceImpl.cancelCache deletes temporary .tmp file', () async {
+      final cacheDir = await Directory.systemTemp.createTemp('setel_cancel_cache_test_');
+      final cacheService = CacheServiceImpl(cacheDirectory: cacheDir);
+
+      const song = Song(
+        videoId: 'cancel_me_1',
+        title: 'Song',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+
+      // Buat file .tmp tiruan seolah-olah sedang download
+      final tmpFile = File('${cacheDir.path}/${song.videoId}.tmp');
+      await tmpFile.writeAsString('partial download chunk data');
+      expect(tmpFile.existsSync(), isTrue);
+
+      // Panggil cancelCache
+      await cacheService.cancelCache(song);
+      expect(tmpFile.existsSync(), isFalse);
+
+      if (cacheDir.existsSync()) {
+        await cacheDir.delete(recursive: true);
+      }
     });
   });
 

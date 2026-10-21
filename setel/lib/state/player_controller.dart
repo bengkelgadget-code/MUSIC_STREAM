@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../core/errors.dart';
 import '../models/song.dart';
 import '../models/song_chapter.dart';
 import '../services/audio_player_service.dart';
@@ -125,8 +124,10 @@ class PlayerController extends Notifier<PlayerControllerState> {
 
   String _formatErrorMessage(Object error) {
     final str = error.toString();
-    if (str.contains('403') || str.contains('Forbidden')) {
-      return 'Gagal memutar lagu: Akses stream YouTube dibatasi (403 Forbidden).';
+    if (str.contains('403') ||
+        str.contains('Forbidden') ||
+        str.contains('server menolak akses stream')) {
+      return 'Gagal memutar lagu: server menolak akses stream (kemungkinan proteksi bot di jaringan ini).';
     } else if (str.contains('SocketException') ||
         str.contains('Failed host lookup') ||
         str.contains('ClientException')) {
@@ -137,12 +138,9 @@ class PlayerController extends Notifier<PlayerControllerState> {
     } else if (str.contains('TimeoutException')) {
       return 'Gagal memutar lagu: Waktu koneksi habis.';
     } else if (str.contains('bot') || str.contains('Sign in to confirm')) {
-      return 'Gagal memutar lagu: Dibatasi verifikasi bot YouTube.';
+      return 'Gagal memutar lagu: server menolak akses stream (kemungkinan proteksi bot di jaringan ini).';
     }
-    final detail = (error is AppException)
-        ? error.message.replaceFirst(RegExp(r'^Gagal memutar lagu:\s*'), '')
-        : str.replaceFirst(RegExp(r'^Exception:\s*'), '');
-    return 'Gagal memutar lagu: Terjadi kesalahan pemutaran ($detail).';
+    return 'Gagal memutar lagu: tidak dapat mengambil data stream.';
   }
 
   Future<void> playSong(Song song) async {

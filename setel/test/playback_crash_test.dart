@@ -159,7 +159,7 @@ void main() {
       expect(stateAfterPlay.playbackError, isNotNull);
       expect(
         stateAfterPlay.playbackError,
-        contains('Akses stream YouTube dibatasi (403 Forbidden)'),
+        contains('server menolak akses stream (kemungkinan proteksi bot di jaringan ini)'),
       );
 
       // 2. clearPlaybackError membersihkan error
@@ -195,7 +195,7 @@ void main() {
       );
       expect(
         container.read(playerControllerProvider).playbackError,
-        contains('Terjadi kesalahan pemutaran'),
+        contains('tidak dapat mengambil data stream'),
       );
 
       container.dispose();

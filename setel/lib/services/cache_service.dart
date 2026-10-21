@@ -22,6 +22,9 @@ abstract class CacheService {
 
   Future<int> cacheSizeBytes();
   Future<void> clearCache();
+
+  /// Batalkan proses unduh/cache yang sedang berlangsung untuk lagu tertentu dan bersihkan file .tmp.
+  Future<void> cancelCache(Song song);
 }
 
 class CacheServiceImpl implements CacheService {
@@ -76,8 +79,27 @@ class CacheServiceImpl implements CacheService {
   }
 
   @override
+  Future<void> cancelCache(Song song) async {
+    try {
+      final cacheDir = await _getCacheDir();
+      final tempFile = File('${cacheDir.path}/${song.videoId}.tmp');
+      if (tempFile.existsSync()) {
+        await tempFile.delete();
+        debugPrint('CacheService: File sementara .tmp untuk ${song.videoId} berhasil dihapus/dibatalkan.');
+      }
+    } catch (e) {
+      debugPrint('CacheService: Gagal membatalkan cache untuk ${song.videoId}: $e');
+    }
+  }
+
+  @override
   Future<File> cacheSong(Song song, Uri streamUrl,
       {Map<String, String>? headers}) async {
+    // Batasi auto-cache: JANGAN auto-cache di background untuk lagu berdurasi > 15 menit (kompilasi panjang)
+    if (song.durationMs > 15 * 60 * 1000) {
+      debugPrint('CacheService: Lewati auto-cache untuk kompilasi panjang (${song.durationMs}ms > 15 menit).');
+      return File('');
+    }
     final cacheDir = await _getCacheDir();
     final targetFile = File('${cacheDir.path}/${song.videoId}.m4a');
 

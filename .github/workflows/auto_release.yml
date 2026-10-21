@@ -39,6 +39,10 @@ jobs:
         working-directory: ./setel
         run: flutter pub get
 
+      - name: Run Tests
+        working-directory: ./setel
+        run: flutter test
+
       - name: Extract Version from pubspec.yaml
         id: extract_version
         run: |

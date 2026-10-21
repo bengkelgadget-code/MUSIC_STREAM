@@ -333,74 +333,120 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         await _player.setFilePath(cachedFile.path);
       } else {
         debugPrint(
-            'Cache miss. Me-resolve stream YouTube audio-only untuk videoId: ${song.videoId}');
-        AudioStreamResult? firstStream;
-        try {
-          final stream =
-              await _youTubeService.resolveStreamUrl(song.videoId);
-          firstStream = stream;
-          debugPrint(
-              'Percobaan pertama memutar stream (${stream.clientName}) ke just_audio via YouTubeAudioSource');
-          final audioSource = YouTubeAudioSource(
-            uri: stream.url,
-            headers: stream.headers,
-            totalBytes: stream.totalBytes,
-            contentType: stream.contentType,
-            tag: song,
-          );
-          await _player.setAudioSource(audioSource);
+            'Cache miss. Me-resolve stream YouTube audio untuk videoId: ${song.videoId}');
+        
+        final clients = YouTubeServiceImpl.streamClients;
+        final totalClients = clients.isNotEmpty ? clients.length : 1;
+        bool playSuccess = false;
+        Object? lastError;
+        String lastClientName = 'unknown';
+        bool allAre403 = true;
+        int errorCount = 0;
 
-          // Lakukan auto-cache di background saat stream dimuat (Fase 4)
-          if (_cacheService != null) {
-            unawaited(_cacheService
-                .cacheSong(song, stream.url, headers: stream.headers)
-                .catchError((e) {
-              debugPrint('Background auto-cache dilewati: $e');
-              return File('');
-            }));
-          }
-        } catch (firstError) {
-          final nextIndex = firstStream != null
-              ? (YouTubeServiceImpl.findClientIndex(firstStream.clientName) + 1) %
-                  YouTubeServiceImpl.streamClients.length
-              : 1;
-          debugPrint(
-              'Percobaan pertama memuat stream gagal ($firstError). Mencoba resolve ulang 1x dengan URL segar & fallback client index $nextIndex...');
-          final freshStream = await _youTubeService.resolveStreamUrl(
-            song.videoId,
-            clientStartIndex: nextIndex,
-          );
-          debugPrint(
-              'Percobaan kedua (retry) memutar stream (${freshStream.clientName}) ke just_audio via YouTubeAudioSource');
-          final audioSource = YouTubeAudioSource(
-            uri: freshStream.url,
-            headers: freshStream.headers,
-            totalBytes: freshStream.totalBytes,
-            contentType: freshStream.contentType,
-            tag: song,
-          );
-          await _player.setAudioSource(audioSource);
+        for (int attempt = 0; attempt < totalClients; attempt++) {
+          final candidate = clients.isNotEmpty ? clients[attempt] : null;
+          final candidateName = candidate?.name ?? 'klien_$attempt';
+          lastClientName = candidateName;
 
-          if (_cacheService != null) {
-            unawaited(_cacheService
-                .cacheSong(song, freshStream.url, headers: freshStream.headers)
-                .catchError((e) {
-              debugPrint('Background auto-cache dilewati: $e');
-              return File('');
-            }));
+          try {
+            debugPrint(
+                'Mencoba putar stream videoId: ${song.videoId} dengan klien: $candidateName (percobaan ${attempt + 1}/$totalClients)...');
+            final stream = await _youTubeService.resolveStreamUrl(
+              song.videoId,
+              clientStartIndex: attempt,
+            );
+            lastClientName = stream.clientName;
+
+            final audioSource = YouTubeAudioSource(
+              uri: stream.url,
+              headers: stream.headers,
+              totalBytes: stream.totalBytes,
+              contentType: stream.contentType,
+              tag: song,
+            );
+
+            await _player.setAudioSource(audioSource);
+
+            // Batasi auto-cache: JANGAN auto-cache di background bila durasi > 15 menit (kompilasi panjang)
+            if (song.durationMs <= 15 * 60 * 1000) {
+              if (_cacheService != null) {
+                unawaited(_cacheService
+                    .cacheSong(song, stream.url, headers: stream.headers)
+                    .catchError((e) {
+                  debugPrint('Background auto-cache dilewati: $e');
+                  return File('');
+                }));
+              }
+            } else {
+              debugPrint(
+                  'Auto-cache dilewati untuk kompilasi panjang (durasi: ${song.durationMs}ms > 15 menit)');
+            }
+
+            playSuccess = true;
+            debugPrint(
+                'Berhasil memuat stream videoId: ${song.videoId} menggunakan klien: ${stream.clientName}');
+            break; // BERHENTI di klien pertama yang berhasil
+          } catch (e) {
+            errorCount++;
+            lastError = e;
+            final errStr = e.toString();
+            final is403 =
+                errStr.contains('403') || errStr.contains('Forbidden');
+            if (!is403) {
+              allAre403 = false;
+            }
+            debugPrint(
+                'Klien $candidateName gagal memutar videoId: ${song.videoId} (error: $errStr). Melanjutkan ke klien berikutnya...');
           }
+        }
+
+        if (!playSuccess) {
+          // Hanya bila SEMUA klien gagal, lempar AppException
+          final isForbidden = (errorCount > 0 && allAre403);
+          final errorMsg = isForbidden
+              ? 'server menolak akses stream (kemungkinan proteksi bot di jaringan ini).'
+              : 'tidak dapat mengambil data stream.';
+          debugPrint(
+              '[AudioPlayerService] Gagal total memutar videoId: ${song.videoId} di SEMUA klien. '
+              'Klien terakhir: $lastClientName, Error terakhir: $lastError');
+          throw AppException('Gagal memutar lagu: $errorMsg', lastError);
         }
       }
 
       await _player.play();
       await _recordPlay(song);
     } catch (e) {
+      // CLEANUP SAAT GAGAL TOTAL:
+      // 1. Reset just_audio dari state loading/error yang nyangkut
+      try {
+        await _player.stop();
+      } catch (stopErr) {
+        debugPrint('AudioPlayerService: Error saat _player.stop(): $stopErr');
+      }
+
+      // 2. Turunkan notifikasi foreground & update playback state ke idle
       _audioHandler.updatePlaybackState(
         isPlaying: false,
         position: Duration.zero,
         duration: Duration.zero,
         processingState: ProcessingState.idle,
       );
+
+      // 3. Batalkan auto-cache yang mungkin sedang berjalan untuk lagu ini
+      if (_cacheService != null) {
+        try {
+          await _cacheService.cancelCache(song);
+        } catch (cancelErr) {
+          debugPrint('AudioPlayerService: Gagal batalkan auto-cache: $cancelErr');
+        }
+      }
+
+      // Emit state agar UI terupdate dan tidak stuck loading
+      _emitState();
+
+      if (e is AppException) {
+        rethrow;
+      }
       throw AppException('Gagal memutar lagu: $e', e);
     }
   }
