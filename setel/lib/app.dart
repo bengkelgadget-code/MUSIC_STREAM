@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'state/providers.dart';
 import 'ui/screens/home_search_screen.dart';
 import 'ui/screens/library_screen.dart';
 import 'ui/screens/settings_screen.dart';
@@ -30,14 +32,15 @@ class SetelApp extends StatelessWidget {
   }
 }
 
-class MainScaffold extends StatefulWidget {
+class MainScaffold extends ConsumerStatefulWidget {
   const MainScaffold({super.key});
 
   @override
-  State<MainScaffold> createState() => _MainScaffoldState();
+  ConsumerState<MainScaffold> createState() => _MainScaffoldState();
 }
 
-class _MainScaffoldState extends State<MainScaffold> {
+class _MainScaffoldState extends ConsumerState<MainScaffold>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
 
   final List<Widget> _screens = const [
@@ -45,6 +48,30 @@ class _MainScaffoldState extends State<MainScaffold> {
     LibraryScreen(),
     SettingsScreen(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached ||
+        state == AppLifecycleState.paused) {
+      try {
+        ref.read(audioPlayerServiceProvider).saveCurrentPosition();
+      } catch (e) {
+        debugPrint('Error saving position on lifecycle change: $e');
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -19,17 +19,20 @@ class HistoryEntryAdapter extends TypeAdapter<HistoryEntry> {
     return HistoryEntry(
       videoId: fields[0] as String,
       playedAt: fields[1] as DateTime,
+      lastPositionMs: (fields[2] as int?) ?? 0,
     );
   }
 
   @override
   void write(BinaryWriter writer, HistoryEntry obj) {
     writer
-      ..writeByte(2)
+      ..writeByte(3)
       ..writeByte(0)
       ..write(obj.videoId)
       ..writeByte(1)
-      ..write(obj.playedAt);
+      ..write(obj.playedAt)
+      ..writeByte(2)
+      ..write(obj.lastPositionMs);
   }
 
   @override

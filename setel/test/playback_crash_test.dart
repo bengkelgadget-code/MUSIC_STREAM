@@ -55,14 +55,18 @@ class FailingAudioPlayerService implements AudioPlayerService {
   Stream<PlayerState> get playerState => _controller.stream;
 
   @override
-  Future<void> playSong(Song song) async {
+  Future<void> playSong(Song song, {Duration? initialPosition}) async {
     throw AppException('Gagal memutar lagu: PlayerException((403) Forbidden)');
   }
 
   @override
-  Future<void> playQueue(List<Song> songs, {int startIndex = 0}) async {
+  Future<void> playQueue(List<Song> songs,
+      {int startIndex = 0, Duration? initialPosition}) async {
     throw AppException('Gagal memutar lagu: PlayerException((403) Forbidden)');
   }
+
+  @override
+  void saveCurrentPosition({bool resetToZero = false}) {}
 
   @override
   Future<void> togglePlayPause() async {

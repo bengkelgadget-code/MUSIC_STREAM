@@ -10,6 +10,7 @@ class SongTile extends StatelessWidget {
   final bool isPlaying;
   final bool isFavorite;
   final String? playCountText;
+  final String? resumePositionText;
   final VoidCallback? onTap;
   final VoidCallback? onPlayNext;
   final VoidCallback? onToggleFavorite;
@@ -22,6 +23,7 @@ class SongTile extends StatelessWidget {
     this.isPlaying = false,
     this.isFavorite = false,
     this.playCountText,
+    this.resumePositionText,
     this.onTap,
     this.onPlayNext,
     this.onToggleFavorite,
@@ -108,6 +110,31 @@ class SongTile extends StatelessWidget {
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
                 ),
+              ),
+            ),
+          ],
+          if (resumePositionText != null) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1DB954).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.history, size: 11, color: Color(0xFF1DB954)),
+                  const SizedBox(width: 3),
+                  Text(
+                    resumePositionText!,
+                    style: const TextStyle(
+                      color: Color(0xFF1DB954),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

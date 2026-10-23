@@ -28,6 +28,10 @@ abstract class LibraryService {
 
   /// Ambil jumlah putar untuk sebuah lagu
   Future<int> getPlayCount(String videoId);
+
+  /// Simpan & ambil menit/posisi terakhir pemutaran lagu (dalam milidetik)
+  Future<void> savePlaybackPosition(String videoId, int positionMs);
+  Future<int> getPlaybackPosition(String videoId);
 }
 
 class LibraryServiceImpl implements LibraryService {
@@ -159,10 +163,16 @@ class LibraryServiceImpl implements LibraryService {
     await songsBox.put(song.videoId, song);
 
     final historyBox = Hive.box<HistoryEntry>(BOX_HISTORY);
+    final posBox = Hive.isBoxOpen(BOX_PLAYBACK_POSITIONS)
+        ? Hive.box<int>(BOX_PLAYBACK_POSITIONS)
+        : await Hive.openBox<int>(BOX_PLAYBACK_POSITIONS);
+    final lastPos = posBox.get(song.videoId) ?? 0;
+
     await historyBox.add(
       HistoryEntry(
         videoId: song.videoId,
         playedAt: DateTime.now(),
+        lastPositionMs: lastPos,
       ),
     );
 
@@ -228,6 +238,38 @@ class LibraryServiceImpl implements LibraryService {
     if (!Hive.isBoxOpen(BOX_PLAY_COUNTS)) return 0;
     final playCountsBox = Hive.box<int>(BOX_PLAY_COUNTS);
     return playCountsBox.get(videoId) ?? 0;
+  }
+
+  @override
+  Future<void> savePlaybackPosition(String videoId, int positionMs) async {
+    if (videoId.isEmpty) return;
+    final posBox = Hive.isBoxOpen(BOX_PLAYBACK_POSITIONS)
+        ? Hive.box<int>(BOX_PLAYBACK_POSITIONS)
+        : await Hive.openBox<int>(BOX_PLAYBACK_POSITIONS);
+    await posBox.put(videoId, positionMs);
+
+    if (Hive.isBoxOpen(BOX_HISTORY)) {
+      final historyBox = Hive.box<HistoryEntry>(BOX_HISTORY);
+      for (int i = historyBox.length - 1; i >= 0; i--) {
+        final entry = historyBox.getAt(i);
+        if (entry != null && entry.videoId == videoId) {
+          await historyBox.putAt(
+            i,
+            entry.copyWith(lastPositionMs: positionMs),
+          );
+          break;
+        }
+      }
+    }
+  }
+
+  @override
+  Future<int> getPlaybackPosition(String videoId) async {
+    if (videoId.isEmpty) return 0;
+    final posBox = Hive.isBoxOpen(BOX_PLAYBACK_POSITIONS)
+        ? Hive.box<int>(BOX_PLAYBACK_POSITIONS)
+        : await Hive.openBox<int>(BOX_PLAYBACK_POSITIONS);
+    return posBox.get(videoId) ?? 0;
   }
 
   Future<List<Song>> getSongsForPlaylist(String playlistId) async {

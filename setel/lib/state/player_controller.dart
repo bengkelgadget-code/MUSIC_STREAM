@@ -143,18 +143,20 @@ class PlayerController extends Notifier<PlayerControllerState> {
     return 'Gagal memutar lagu: tidak dapat mengambil data stream.';
   }
 
-  Future<void> playSong(Song song) async {
+  Future<void> playSong(Song song, {Duration? initialPosition}) async {
     try {
-      await _audioPlayerService.playSong(song);
+      await _audioPlayerService.playSong(song, initialPosition: initialPosition);
     } catch (e, st) {
       debugPrint('PlayerController.playSong error: $e\n$st');
       state = state.copyWith(playbackError: _formatErrorMessage(e));
     }
   }
 
-  Future<void> playQueue(List<Song> songs, {int startIndex = 0}) async {
+  Future<void> playQueue(List<Song> songs,
+      {int startIndex = 0, Duration? initialPosition}) async {
     try {
-      await _audioPlayerService.playQueue(songs, startIndex: startIndex);
+      await _audioPlayerService.playQueue(songs,
+          startIndex: startIndex, initialPosition: initialPosition);
     } catch (e, st) {
       debugPrint('PlayerController.playQueue error: $e\n$st');
       state = state.copyWith(playbackError: _formatErrorMessage(e));

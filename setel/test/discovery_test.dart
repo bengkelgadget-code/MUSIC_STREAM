@@ -50,10 +50,14 @@ class DummyAudioPlayerService implements AudioPlayerService {
   Future<void> next() async {}
 
   @override
-  Future<void> playQueue(List<Song> songs, {int startIndex = 0}) async {}
+  Future<void> playQueue(List<Song> songs,
+      {int startIndex = 0, Duration? initialPosition}) async {}
 
   @override
-  Future<void> playSong(Song song) async {}
+  Future<void> playSong(Song song, {Duration? initialPosition}) async {}
+
+  @override
+  void saveCurrentPosition({bool resetToZero = false}) {}
 
   @override
   Future<void> previous() async {}

@@ -38,6 +38,7 @@ class HiveInit {
     final playCountsBox = await Hive.openBox<int>(BOX_PLAY_COUNTS);
     await Hive.openBox(BOX_SONG_CHAPTERS);
     await Hive.openBox(BOX_DISCOVERY_CONFIG);
+    await Hive.openBox<int>(BOX_PLAYBACK_POSITIONS);
 
     // Migrasi sekali jalan: jika play_counts kosong dan history ada data,
     // hitung jumlah kemunculan tiap videoId dan isi play_counts.

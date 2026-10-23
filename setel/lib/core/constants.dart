@@ -15,3 +15,4 @@ const String BOX_SETTINGS = 'settings';
 const String BOX_PLAY_COUNTS = 'play_counts';
 const String BOX_SONG_CHAPTERS = 'song_chapters';
 const String BOX_DISCOVERY_CONFIG = 'discovery_config';
+const String BOX_PLAYBACK_POSITIONS = 'playback_positions';

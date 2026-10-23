@@ -9,6 +9,7 @@ class LibraryState {
   final List<Playlist> playlists;
   final List<Song> favorites;
   final List<Song> historySongs;
+  final Map<String, int> playbackPositions;
   final Set<String> favoriteIds;
   final bool isLoading;
 
@@ -16,6 +17,7 @@ class LibraryState {
     this.playlists = const [],
     this.favorites = const [],
     this.historySongs = const [],
+    this.playbackPositions = const {},
     this.favoriteIds = const {},
     this.isLoading = false,
   });
@@ -24,6 +26,7 @@ class LibraryState {
     List<Playlist>? playlists,
     List<Song>? favorites,
     List<Song>? historySongs,
+    Map<String, int>? playbackPositions,
     Set<String>? favoriteIds,
     bool? isLoading,
   }) {
@@ -31,6 +34,7 @@ class LibraryState {
       playlists: playlists ?? this.playlists,
       favorites: favorites ?? this.favorites,
       historySongs: historySongs ?? this.historySongs,
+      playbackPositions: playbackPositions ?? this.playbackPositions,
       favoriteIds: favoriteIds ?? this.favoriteIds,
       isLoading: isLoading ?? this.isLoading,
     );
@@ -66,10 +70,19 @@ class LibraryController extends Notifier<LibraryState> {
 
     final favoriteIds = favorites.map((s) => s.videoId).toSet();
 
+    final playbackPositions = <String, int>{};
+    for (final entry in historyEntries) {
+      final pos = await _libraryService.getPlaybackPosition(entry.videoId);
+      if (pos > 0) {
+        playbackPositions[entry.videoId] = pos;
+      }
+    }
+
     state = state.copyWith(
       playlists: playlists,
       favorites: favorites,
       historySongs: historySongs,
+      playbackPositions: playbackPositions,
       favoriteIds: favoriteIds,
       isLoading: false,
     );

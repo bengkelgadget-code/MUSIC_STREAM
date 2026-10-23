@@ -8,6 +8,7 @@ class SetelAudioHandler extends BaseAudioHandler
   VoidCallback? onPauseCallback;
   VoidCallback? onSkipToNextCallback;
   VoidCallback? onSkipToPreviousCallback;
+  VoidCallback? onStopCallback;
   void Function(Duration position)? onSeekCallback;
 
   SetelAudioHandler() {
@@ -61,6 +62,7 @@ class SetelAudioHandler extends BaseAudioHandler
                 MediaControl.skipToPrevious,
                 isPlaying ? MediaControl.pause : MediaControl.play,
                 MediaControl.skipToNext,
+                MediaControl.stop,
               ],
         systemActions: mediaItem.value == null
             ? const {}
@@ -68,6 +70,7 @@ class SetelAudioHandler extends BaseAudioHandler
                 MediaAction.seek,
                 MediaAction.seekForward,
                 MediaAction.seekBackward,
+                MediaAction.stop,
               },
         androidCompactActionIndices:
             mediaItem.value == null ? const [] : const [0, 1, 2],
@@ -152,6 +155,19 @@ class SetelAudioHandler extends BaseAudioHandler
   Future<void> seek(Duration position) async {
     onSeekCallback?.call(position);
   }
+
+  @override
+  Future<void> stop() async {
+    onStopCallback?.call();
+    clearMediaItem();
+    await super.stop();
+  }
+
+  @override
+  Future<void> onTaskRemoved() async {
+    debugPrint('AudioHandler: App task removed by user, stopping background service.');
+    await stop();
+  }
 }
 
 SetelAudioHandler? _globalAudioHandler;
@@ -171,7 +187,7 @@ Future<SetelAudioHandler> initAudioService() async {
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.bengkel.setel.channel.audio',
       androidNotificationChannelName: 'Setel Audio Playback',
-      androidNotificationOngoing: true,
+      androidNotificationOngoing: false,
       androidStopForegroundOnPause: true,
       androidShowNotificationBadge: true,
     ),

@@ -88,8 +88,8 @@ class PlayerState {
 
 abstract class AudioPlayerService {
   /// Alur: resolveStreamUrl(videoId) → cek cache → just_audio.setUrl → play → recordPlay.
-  Future<void> playSong(Song song);
-  Future<void> playQueue(List<Song> songs, {int startIndex = 0});
+  Future<void> playSong(Song song, {Duration? initialPosition});
+  Future<void> playQueue(List<Song> songs, {int startIndex = 0, Duration? initialPosition});
   Future<void> togglePlayPause();
   Future<void> next();
   Future<void> previous();
@@ -97,6 +97,7 @@ abstract class AudioPlayerService {
   Future<void> setShuffle(bool enabled);
   Future<void> setRepeatMode(RepeatMode mode);
   Future<void> addToQueueNext(Song song); // "play next"
+  void saveCurrentPosition({bool resetToZero = false});
 
   Stream<PlayerState>
       get playerState; // isPlaying, position, currentSong, queue, shuffle, repeatMode
@@ -128,6 +129,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   Timer? _sleepTimer;
   DateTime? _sleepTimerEndTime;
   bool _sleepAfterCurrentTrack = false;
+  Duration? _pendingInitialPosition;
+  DateTime _lastPositionSaveTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   int _findChapterIndex(Duration pos, List<SongChapter> chapters) {
     if (chapters.isEmpty) return -1;
@@ -176,6 +179,10 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           _chapterIndex = newIdx;
         }
       }
+      if (pos.inSeconds >= 2 &&
+          DateTime.now().difference(_lastPositionSaveTime).inSeconds >= 3) {
+        saveCurrentPosition();
+      }
       _emitState();
     });
 
@@ -193,10 +200,36 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
   void _connectAudioHandler() {
     _audioHandler.onPlayCallback = () => _player.play();
-    _audioHandler.onPauseCallback = () => _player.pause();
+    _audioHandler.onPauseCallback = () {
+      saveCurrentPosition();
+      _player.pause();
+    };
     _audioHandler.onSkipToNextCallback = () => next();
     _audioHandler.onSkipToPreviousCallback = () => previous();
     _audioHandler.onSeekCallback = (position) => seek(position);
+    _audioHandler.onStopCallback = () async {
+      saveCurrentPosition();
+      try {
+        await _player.stop();
+      } catch (e) {
+        debugPrint('AudioPlayerService onStopCallback error: $e');
+      }
+      _audioHandler.clearMediaItem();
+      _queue.clear();
+      _currentIndex = -1;
+      _currentSong = null;
+      _emitState();
+    };
+  }
+
+  @override
+  void saveCurrentPosition({bool resetToZero = false}) {
+    final song = _currentSong;
+    if (song == null || _libraryService == null) return;
+    final posMs = resetToZero ? 0 : _player.position.inMilliseconds;
+    if (!resetToZero && posMs < 2000) return;
+    _libraryService.savePlaybackPosition(song.videoId, posMs);
+    _lastPositionSaveTime = DateTime.now();
   }
 
   void _emitState() {
@@ -220,6 +253,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
   Future<void> _handleTrackEnded() async {
     try {
+      saveCurrentPosition(resetToZero: true);
+
       // Cek jika sleep timer "Habis lagu ini" aktif
       if (_sleepAfterCurrentTrack) {
         await _player.pause();
@@ -247,8 +282,10 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   Stream<PlayerState> get playerState => _stateController.stream;
 
   @override
-  Future<void> playSong(Song song) async {
+  Future<void> playSong(Song song, {Duration? initialPosition}) async {
     // Sesuai catatan auditor: playSong() me-reset antrean menjadi hanya [song]
+    saveCurrentPosition();
+    _pendingInitialPosition = initialPosition;
     _queue = [song];
     _currentIndex = 0;
     _currentSong = song;
@@ -258,8 +295,10 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   }
 
   @override
-  Future<void> playQueue(List<Song> songs, {int startIndex = 0}) async {
+  Future<void> playQueue(List<Song> songs, {int startIndex = 0, Duration? initialPosition}) async {
     if (songs.isEmpty) return;
+    saveCurrentPosition();
+    _pendingInitialPosition = initialPosition;
 
     if (!listEquals(_queue, songs)) {
       _queue = List.from(songs);
@@ -306,12 +345,15 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           : null,
     );
 
+    final initPos = _pendingInitialPosition;
+    _pendingInitialPosition = null;
+
     // SEBELUM resolveStreamUrl (langkah lambat), panggil updatePlaybackState
     // dengan processingState=loading + isPlaying=true, supaya audio_service
     // bisa menaikkan foreground & notifikasi dalam <1 detik setelah user tap.
     _audioHandler.updatePlaybackState(
       isPlaying: true,
-      position: Duration.zero,
+      position: initPos ?? Duration.zero,
       duration: song.durationMs > 0
           ? Duration(milliseconds: song.durationMs)
           : Duration.zero,
@@ -330,7 +372,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
       if (cachedFile != null) {
         debugPrint('Memutar dari cache lokal offline: ${cachedFile.path}');
-        await _player.setFilePath(cachedFile.path);
+        await _player.setFilePath(cachedFile.path, initialPosition: initPos);
       } else {
         debugPrint(
             'Cache miss. Me-resolve stream YouTube audio untuk videoId: ${song.videoId}');
@@ -365,7 +407,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
               tag: song,
             );
 
-            await _player.setAudioSource(audioSource);
+            await _player.setAudioSource(audioSource, initialPosition: initPos);
 
             // Batasi auto-cache: JANGAN auto-cache di background bila durasi > 15 menit (kompilasi panjang)
             if (song.durationMs <= 15 * 60 * 1000) {
@@ -454,6 +496,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   @override
   Future<void> togglePlayPause() async {
     if (_player.playing) {
+      saveCurrentPosition();
       await _player.pause();
     } else {
       if (_currentSong != null) {
@@ -468,6 +511,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   @override
   Future<void> next() async {
     if (_queue.isEmpty) return;
+    saveCurrentPosition();
 
     if (_repeatMode == RepeatMode.one) {
       await seek(Duration.zero);
@@ -504,6 +548,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   @override
   Future<void> previous() async {
     if (_queue.isEmpty) return;
+    saveCurrentPosition();
 
     // Bila ada chapters:
     // bila chapterIndex > 0 -> mundur satu chapter
@@ -713,6 +758,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   }
 
   void dispose() {
+    saveCurrentPosition();
     _sleepTimer?.cancel();
     _playerStateSub?.cancel();
     _positionSub?.cancel();

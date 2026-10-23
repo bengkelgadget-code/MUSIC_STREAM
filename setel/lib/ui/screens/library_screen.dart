@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/utils.dart';
 import '../../models/playlist.dart';
 import '../../models/song.dart';
 import '../../state/providers.dart';
@@ -489,7 +490,33 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 icon: const Icon(Icons.play_arrow),
                 label: const Text('Putar Riwayat'),
                 onPressed: () {
-                  playerController.playQueue(historySongs, startIndex: 0);
+                  final firstSong = historySongs.first;
+                  final firstPos =
+                      libraryState.playbackPositions[firstSong.videoId] ?? 0;
+                  final canResumeFirst = firstPos > 3000 &&
+                      (firstSong.durationMs == 0 ||
+                          firstPos < firstSong.durationMs - 2000);
+                  final initialPos = canResumeFirst
+                      ? Duration(milliseconds: firstPos)
+                      : null;
+                  if (canResumeFirst && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Menyambung "${firstSong.title}" dari ${formatDurationMs(firstPos)}...',
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                        backgroundColor: const Color(0xFF282828),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                  playerController.playQueue(
+                    historySongs,
+                    startIndex: 0,
+                    initialPosition: initialPos,
+                  );
                 },
               ),
             ],
@@ -510,15 +537,41 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
               final isCurrent =
                   playerState.currentSong?.videoId == song.videoId;
               final isPlaying = isCurrent && playerState.isPlaying;
+              final savedPos =
+                  libraryState.playbackPositions[song.videoId] ?? 0;
+              final canResume = savedPos > 3000 &&
+                  (song.durationMs == 0 ||
+                      savedPos < song.durationMs - 2000);
 
               return SongTile(
                 song: song,
                 isCurrent: isCurrent,
                 isPlaying: isPlaying,
                 isFavorite: libraryState.favoriteIds.contains(song.videoId),
+                resumePositionText:
+                    canResume ? 'Lanjut ${formatDurationMs(savedPos)}' : null,
                 onTap: () {
-                  playerController.playQueue(historySongs,
-                      startIndex: index);
+                  final initialPos = canResume
+                      ? Duration(milliseconds: savedPos)
+                      : null;
+                  if (canResume && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Menyambung "${song.title}" dari ${formatDurationMs(savedPos)}...',
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                        backgroundColor: const Color(0xFF282828),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                  playerController.playQueue(
+                    historySongs,
+                    startIndex: index,
+                    initialPosition: initialPos,
+                  );
                 },
                 onPlayNext: () {
                   playerController.addToQueueNext(song);
