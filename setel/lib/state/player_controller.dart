@@ -21,6 +21,8 @@ class PlayerControllerState {
   final String? playbackError;
   final List<SongChapter> chapters;
   final int chapterIndex;
+  final bool isAutoMix;
+  final String? mixSeedTitle;
 
   const PlayerControllerState({
     this.currentSong,
@@ -35,6 +37,8 @@ class PlayerControllerState {
     this.playbackError,
     this.chapters = const [],
     this.chapterIndex = -1,
+    this.isAutoMix = false,
+    this.mixSeedTitle,
   });
 
   bool get hasChapters => chapters.length >= 2;
@@ -58,6 +62,9 @@ class PlayerControllerState {
     bool clearPlaybackError = false,
     List<SongChapter>? chapters,
     int? chapterIndex,
+    bool? isAutoMix,
+    String? mixSeedTitle,
+    bool clearMixSeed = false,
   }) {
     return PlayerControllerState(
       currentSong: currentSong ?? this.currentSong,
@@ -78,6 +85,9 @@ class PlayerControllerState {
           : (playbackError ?? this.playbackError),
       chapters: chapters ?? this.chapters,
       chapterIndex: chapterIndex ?? this.chapterIndex,
+      isAutoMix: isAutoMix ?? this.isAutoMix,
+      mixSeedTitle:
+          clearMixSeed ? null : (mixSeedTitle ?? this.mixSeedTitle),
     );
   }
 }
@@ -106,6 +116,8 @@ class PlayerController extends Notifier<PlayerControllerState> {
             !playerState.sleepAfterCurrentTrack,
         chapters: playerState.chapters,
         chapterIndex: playerState.chapterIndex,
+        isAutoMix: playerState.isAutoMix,
+        mixSeedTitle: playerState.mixSeedTitle,
       );
     });
 
@@ -143,9 +155,14 @@ class PlayerController extends Notifier<PlayerControllerState> {
     return 'Gagal memutar lagu: tidak dapat mengambil data stream.';
   }
 
-  Future<void> playSong(Song song, {Duration? initialPosition}) async {
+  Future<void> playSong(Song song,
+      {Duration? initialPosition, bool autoMix = false}) async {
     try {
-      await _audioPlayerService.playSong(song, initialPosition: initialPosition);
+      await _audioPlayerService.playSong(
+        song,
+        initialPosition: initialPosition,
+        autoMix: autoMix,
+      );
     } catch (e, st) {
       debugPrint('PlayerController.playSong error: $e\n$st');
       state = state.copyWith(playbackError: _formatErrorMessage(e));

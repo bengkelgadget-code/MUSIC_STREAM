@@ -38,6 +38,10 @@ class ThrottledYouTubeService implements YouTubeService {
   Future<List<SongChapter>> getChapters(String videoId) async => [];
 
   @override
+  Future<List<Song>> getRelatedSongs(String videoId, {int limit = 20}) async =>
+      [];
+
+  @override
   Future<Song> fetchMetadata(String videoId) async => const Song(
         videoId: 'slow_net_1',
         title: 'Title',
@@ -55,7 +59,8 @@ class FailingAudioPlayerService implements AudioPlayerService {
   Stream<PlayerState> get playerState => _controller.stream;
 
   @override
-  Future<void> playSong(Song song, {Duration? initialPosition}) async {
+  Future<void> playSong(Song song,
+      {Duration? initialPosition, bool autoMix = false}) async {
     throw AppException('Gagal memutar lagu: PlayerException((403) Forbidden)');
   }
 

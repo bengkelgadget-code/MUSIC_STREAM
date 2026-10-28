@@ -13,6 +13,7 @@ class SongTile extends StatelessWidget {
   final String? resumePositionText;
   final VoidCallback? onTap;
   final VoidCallback? onPlayNext;
+  final VoidCallback? onStartRadio;
   final VoidCallback? onToggleFavorite;
   final VoidCallback? onAddToPlaylist;
 
@@ -26,6 +27,7 @@ class SongTile extends StatelessWidget {
     this.resumePositionText,
     this.onTap,
     this.onPlayNext,
+    this.onStartRadio,
     this.onToggleFavorite,
     this.onAddToPlaylist,
   });
@@ -181,15 +183,28 @@ class SongTile extends StatelessWidget {
               tooltip: isFavorite ? 'Hapus dari Favorit' : 'Tambah ke Favorit',
               onPressed: onToggleFavorite,
             ),
-          if (onPlayNext != null || onAddToPlaylist != null)
+          if (onPlayNext != null || onStartRadio != null || onAddToPlaylist != null)
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, color: Colors.white54, size: 20),
               color: const Color(0xFF282828),
               onSelected: (val) {
                 if (val == 'play_next') onPlayNext?.call();
+                if (val == 'start_radio') onStartRadio?.call();
                 if (val == 'add_playlist') onAddToPlaylist?.call();
               },
               itemBuilder: (context) => [
+                if (onStartRadio != null)
+                  const PopupMenuItem(
+                    value: 'start_radio',
+                    child: Row(
+                      children: [
+                        Icon(Icons.auto_awesome, color: Color(0xFF1DB954), size: 20),
+                        SizedBox(width: 10),
+                        Text('Putar Mix / Radio',
+                            style: TextStyle(color: Colors.white)),
+                      ],
+                    ),
+                  ),
                 if (onPlayNext != null)
                   const PopupMenuItem(
                     value: 'play_next',

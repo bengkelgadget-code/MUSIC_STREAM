@@ -85,6 +85,40 @@ class QueueSheet extends ConsumerWidget {
                 ),
               ),
 
+              if (playerState.isAutoMix && playerState.mixSeedTitle != null)
+                Container(
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1DB954).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: const Color(0xFF1DB954).withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.auto_awesome,
+                          color: Color(0xFF1DB954), size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Mix Radio: Terkait "${playerState.mixSeedTitle}"',
+                          style: const TextStyle(
+                            color: Color(0xFF1DB954),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
               const Divider(color: Colors.white10, height: 16),
 
               // Queue List

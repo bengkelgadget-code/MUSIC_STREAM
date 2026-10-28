@@ -75,6 +75,10 @@ class TestYouTubeService implements YouTubeService {
   Future<List<SongChapter>> getChapters(String videoId) async => [];
 
   @override
+  Future<List<Song>> getRelatedSongs(String videoId, {int limit = 20}) async =>
+      [];
+
+  @override
   Future<Song> fetchMetadata(String videoId) async {
     return Song(
       videoId: videoId,

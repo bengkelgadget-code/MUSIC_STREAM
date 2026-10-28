@@ -33,6 +33,10 @@ class DummyYouTubeService implements YouTubeService {
   Future<List<SongChapter>> getChapters(String videoId) async => [];
 
   @override
+  Future<List<Song>> getRelatedSongs(String videoId, {int limit = 20}) async =>
+      [];
+
+  @override
   Future<Song> fetchMetadata(String videoId) async => const Song(
         videoId: 'm1',
         title: 'Title',

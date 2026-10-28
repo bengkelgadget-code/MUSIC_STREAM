@@ -206,6 +206,9 @@ abstract class YouTubeService {
 
   /// Metadata cadangan via iTunes Search API (tanpa key), dipakai jika perlu.
   Future<Song> fetchMetadata(String videoId);
+
+  /// Ambil lagu rekomendasi / mix radio terkait videoId (Smart Mix / Radio).
+  Future<List<Song>> getRelatedSongs(String videoId, {int limit = 20});
 }
 
 class YouTubeServiceImpl implements YouTubeService {
@@ -742,5 +745,102 @@ class YouTubeServiceImpl implements YouTubeService {
       durationMs: 0,
       thumbnailUrl: 'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
     );
+  }
+
+  @override
+  Future<List<Song>> getRelatedSongs(String videoId, {int limit = 20}) async {
+    final cleanId = videoId.trim();
+    if (cleanId.isEmpty) return [];
+
+    final cacheKey = 'related:$cleanId';
+    // 1. Cek cache Hive search_cache (TTL 24 jam)
+    if (Hive.isBoxOpen(BOX_SEARCH_CACHE)) {
+      final cacheBox = Hive.box<SearchCache>(BOX_SEARCH_CACHE);
+      final cached = cacheBox.get(cacheKey);
+      if (cached != null && !cached.isExpired(ttl: SEARCH_CACHE_TTL)) {
+        final songsBox = Hive.box<Song>(BOX_SONGS);
+        final cachedSongs = <Song>[];
+        for (final id in cached.videoIds) {
+          final s = songsBox.get(id);
+          if (s != null) cachedSongs.add(s);
+        }
+        if (cachedSongs.isNotEmpty) {
+          debugPrint(
+              'getRelatedSongs cache hit ($cacheKey): ${cachedSongs.length} lagu');
+          return cachedSongs.take(limit).toList();
+        }
+      }
+    }
+
+    final yt = YoutubeExplode();
+    final results = <Song>[];
+    final seenIds = <String>{cleanId};
+
+    try {
+      final video = await yt.videos.get(cleanId);
+      final relatedList = await yt.videos.getRelatedVideos(video);
+
+      if (relatedList != null && relatedList.isNotEmpty) {
+        for (final v in relatedList) {
+          final id = v.id.value;
+          if (seenIds.contains(id)) continue;
+          seenIds.add(id);
+
+          final durMs = v.duration?.inMilliseconds ?? 0;
+          // Filter: jangan masukkan kompilasi panjang (> 15 menit) ke dalam mix radio
+          if (durMs > 15 * 60 * 1000) continue;
+
+          results.add(
+            Song(
+              videoId: id,
+              title: v.title,
+              artist: v.author,
+              thumbnailUrl: v.thumbnails.highResUrl.isNotEmpty
+                  ? v.thumbnails.highResUrl
+                  : 'https://img.youtube.com/vi/$id/hqdefault.jpg',
+              durationMs: durMs,
+            ),
+          );
+          if (results.length >= limit) break;
+        }
+      }
+
+      // 2. Jika hasil terkait rekomendasi masih sedikit (< 5 lagu),
+      // lengkapi dengan pencarian artis/lagu sejenis
+      if (results.length < 5) {
+        final query = '${video.author} ${video.title}';
+        final searchResults = await search(query, limit: limit);
+        for (final s in searchResults) {
+          if (!seenIds.contains(s.videoId) && s.durationMs <= 15 * 60 * 1000) {
+            seenIds.add(s.videoId);
+            results.add(s);
+            if (results.length >= limit) break;
+          }
+        }
+      }
+
+      // 3. Simpan ke cache jika ada hasil
+      if (results.isNotEmpty && Hive.isBoxOpen(BOX_SEARCH_CACHE)) {
+        final songsBox = Hive.box<Song>(BOX_SONGS);
+        for (final s in results) {
+          await songsBox.put(s.videoId, s);
+        }
+        final cacheBox = Hive.box<SearchCache>(BOX_SEARCH_CACHE);
+        await cacheBox.put(
+          cacheKey,
+          SearchCache(
+            query: cacheKey,
+            videoIds: results.map((s) => s.videoId).toList(),
+            cachedAt: DateTime.now(),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Gagal mengambil related songs untuk videoId $videoId: $e');
+    } finally {
+      yt.close();
+    }
+
+    return results;
   }
 }

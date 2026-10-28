@@ -30,6 +30,9 @@ class DummyYouTubeService implements YouTubeService {
   @override
   Future<List<SongChapter>> getChapters(String videoId) async => [];
   @override
+  Future<List<Song>> getRelatedSongs(String videoId, {int limit = 20}) async =>
+      [];
+  @override
   Future<Song> fetchMetadata(String videoId) async => const Song(
         videoId: 's1',
         title: 'Title',
@@ -54,7 +57,8 @@ class DummyAudioPlayerService implements AudioPlayerService {
       {int startIndex = 0, Duration? initialPosition}) async {}
 
   @override
-  Future<void> playSong(Song song, {Duration? initialPosition}) async {}
+  Future<void> playSong(Song song,
+      {Duration? initialPosition, bool autoMix = false}) async {}
 
   @override
   void saveCurrentPosition({bool resetToZero = false}) {}

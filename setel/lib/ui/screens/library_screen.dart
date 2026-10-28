@@ -429,6 +429,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 onPlayNext: () {
                   playerController.addToQueueNext(song);
                 },
+                onStartRadio: () {
+                  playerController.playSong(song, autoMix: true);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      duration: const Duration(seconds: 2),
+                      content: Text(
+                          'Memutar "${song.title}" • Menyiapkan Mix Radio serupa...'),
+                      backgroundColor: const Color(0xFF282828),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
               );
             },
           ),
@@ -576,6 +588,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 onPlayNext: () {
                   playerController.addToQueueNext(song);
                 },
+                onStartRadio: () {
+                  playerController.playSong(song, autoMix: true);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      duration: const Duration(seconds: 2),
+                      content: Text(
+                          'Memutar "${song.title}" • Menyiapkan Mix Radio serupa...'),
+                      backgroundColor: const Color(0xFF282828),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
               );
             },
           ),
@@ -699,6 +723,18 @@ class _PlaylistDetailScreenState
                       },
                       onPlayNext: () {
                         playerController.addToQueueNext(song);
+                      },
+                      onStartRadio: () {
+                        playerController.playSong(song, autoMix: true);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            duration: const Duration(seconds: 2),
+                            content: Text(
+                                'Memutar "${song.title}" • Menyiapkan Mix Radio serupa...'),
+                            backgroundColor: const Color(0xFF282828),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
                       },
                     );
                   },

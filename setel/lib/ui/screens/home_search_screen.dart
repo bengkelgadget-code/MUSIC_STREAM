@@ -336,6 +336,18 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                       startIndex: index,
                     );
                   },
+                  onStartRadio: () {
+                    playerController.playSong(song, autoMix: true);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        duration: const Duration(seconds: 2),
+                        content: Text(
+                            'Memutar "${song.title}" • Menyiapkan Mix Radio serupa...'),
+                        backgroundColor: const Color(0xFF282828),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  },
                   onToggleFavorite: () {
                     libraryController.toggleFavorite(song);
                   },
@@ -677,9 +689,27 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                     isPlaying: isPlaying,
                     isFavorite: isFavorite,
                     onTap: () {
-                      playerController.playQueue(
-                        searchState.results,
-                        startIndex: index,
+                      playerController.playSong(song, autoMix: true);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          duration: const Duration(seconds: 2),
+                          content: Text(
+                              'Memutar "${song.title}" • Menyiapkan Mix Radio serupa...'),
+                          backgroundColor: const Color(0xFF282828),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    onStartRadio: () {
+                      playerController.playSong(song, autoMix: true);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          duration: const Duration(seconds: 2),
+                          content: Text(
+                              'Memutar "${song.title}" • Menyiapkan Mix Radio serupa...'),
+                          backgroundColor: const Color(0xFF282828),
+                          behavior: SnackBarBehavior.floating,
+                        ),
                       );
                     },
                     onToggleFavorite: () {

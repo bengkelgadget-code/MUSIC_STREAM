@@ -31,6 +31,8 @@ class PlayerState {
   final bool sleepAfterCurrentTrack;
   final List<SongChapter> chapters;
   final int chapterIndex;
+  final bool isAutoMix;
+  final String? mixSeedTitle;
 
   const PlayerState({
     this.isPlaying = false,
@@ -44,6 +46,8 @@ class PlayerState {
     this.sleepAfterCurrentTrack = false,
     this.chapters = const [],
     this.chapterIndex = -1,
+    this.isAutoMix = false,
+    this.mixSeedTitle,
   });
 
   bool get hasChapters => chapters.length >= 2;
@@ -63,8 +67,11 @@ class PlayerState {
     DateTime? sleepTimerEndTime,
     bool? sleepAfterCurrentTrack,
     bool clearSleepTimer = false,
+    bool clearMixSeed = false,
     List<SongChapter>? chapters,
     int? chapterIndex,
+    bool? isAutoMix,
+    String? mixSeedTitle,
   }) {
     return PlayerState(
       isPlaying: isPlaying ?? this.isPlaying,
@@ -82,13 +89,17 @@ class PlayerState {
           : (sleepAfterCurrentTrack ?? this.sleepAfterCurrentTrack),
       chapters: chapters ?? this.chapters,
       chapterIndex: chapterIndex ?? this.chapterIndex,
+      isAutoMix: isAutoMix ?? this.isAutoMix,
+      mixSeedTitle: clearMixSeed
+          ? null
+          : (mixSeedTitle ?? this.mixSeedTitle),
     );
   }
 }
 
 abstract class AudioPlayerService {
   /// Alur: resolveStreamUrl(videoId) → cek cache → just_audio.setUrl → play → recordPlay.
-  Future<void> playSong(Song song, {Duration? initialPosition});
+  Future<void> playSong(Song song, {Duration? initialPosition, bool autoMix = false});
   Future<void> playQueue(List<Song> songs, {int startIndex = 0, Duration? initialPosition});
   Future<void> togglePlayPause();
   Future<void> next();
@@ -131,6 +142,9 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   bool _sleepAfterCurrentTrack = false;
   Duration? _pendingInitialPosition;
   DateTime _lastPositionSaveTime = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _isAutoMix = false;
+  String? _mixSeedTitle;
+  int _autoMixSessionId = 0;
 
   int _findChapterIndex(Duration pos, List<SongChapter> chapters) {
     if (chapters.isEmpty) return -1;
@@ -218,6 +232,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       _queue.clear();
       _currentIndex = -1;
       _currentSong = null;
+      _isAutoMix = false;
+      _mixSeedTitle = null;
       _emitState();
     };
   }
@@ -247,6 +263,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       sleepAfterCurrentTrack: _sleepAfterCurrentTrack,
       chapters: List.unmodifiable(_chapters),
       chapterIndex: _chapterIndex,
+      isAutoMix: _isAutoMix,
+      mixSeedTitle: _mixSeedTitle,
     );
     _stateController.add(state);
   }
@@ -270,6 +288,19 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       } else if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
         _currentIndex = 0;
         await _playTrackAtCurrentIndex();
+      } else if (_isAutoMix && _currentSong != null) {
+        // Endless Autoplay: muat lagu terkait berikutnya saat antrean habis
+        final more = await _youTubeService.getRelatedSongs(_currentSong!.videoId, limit: 15);
+        final existingIds = _queue.map((s) => s.videoId).toSet();
+        final fresh = more.where((s) => !existingIds.contains(s.videoId)).toList();
+        if (fresh.isNotEmpty) {
+          _queue.addAll(fresh);
+          _currentIndex++;
+          _emitState();
+          await _playTrackAtCurrentIndex();
+          return;
+        }
+        await _player.pause();
       } else {
         await _player.pause();
       }
@@ -282,16 +313,46 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   Stream<PlayerState> get playerState => _stateController.stream;
 
   @override
-  Future<void> playSong(Song song, {Duration? initialPosition}) async {
-    // Sesuai catatan auditor: playSong() me-reset antrean menjadi hanya [song]
+  Future<void> playSong(Song song, {Duration? initialPosition, bool autoMix = false}) async {
     saveCurrentPosition();
     _pendingInitialPosition = initialPosition;
+    _isAutoMix = autoMix;
+    _mixSeedTitle = autoMix ? song.title : null;
     _queue = [song];
     _currentIndex = 0;
     _currentSong = song;
     _emitState();
 
     await _playTrackAtCurrentIndex();
+
+    if (autoMix) {
+      unawaited(_loadAutoMix(song));
+    }
+  }
+
+  Future<void> _loadAutoMix(Song song) async {
+    final sessionId = ++_autoMixSessionId;
+    try {
+      debugPrint('Memuat Smart Mix / Radio terkait untuk: ${song.title} - ${song.artist}...');
+      final related = await _youTubeService.getRelatedSongs(song.videoId, limit: 20);
+
+      // Pastikan sesi masih relevan
+      if (_autoMixSessionId != sessionId) return;
+      if (_currentSong?.videoId != song.videoId) return;
+
+      if (related.isNotEmpty) {
+        final existingIds = _queue.map((s) => s.videoId).toSet();
+        final newTracks = related.where((s) => !existingIds.contains(s.videoId)).toList();
+
+        if (newTracks.isNotEmpty) {
+          _queue.addAll(newTracks);
+          _emitState();
+          debugPrint('Smart Mix berhasil ditambahkan ke antrean: +${newTracks.length} lagu terkait!');
+        }
+      }
+    } catch (e) {
+      debugPrint('Error _loadAutoMix: $e');
+    }
   }
 
   @override
@@ -299,6 +360,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     if (songs.isEmpty) return;
     saveCurrentPosition();
     _pendingInitialPosition = initialPosition;
+    _isAutoMix = false;
+    _mixSeedTitle = null;
 
     if (!listEquals(_queue, songs)) {
       _queue = List.from(songs);
@@ -538,6 +601,19 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       _currentIndex++;
     } else if (_repeatMode == RepeatMode.all) {
       _currentIndex = 0;
+    } else if (_isAutoMix && _currentSong != null) {
+      // Endless Autoplay: muat lagu terkait berikutnya saat user tap next di akhir antrean
+      final more = await _youTubeService.getRelatedSongs(_currentSong!.videoId, limit: 15);
+      final existingIds = _queue.map((s) => s.videoId).toSet();
+      final fresh = more.where((s) => !existingIds.contains(s.videoId)).toList();
+      if (fresh.isNotEmpty) {
+        _queue.addAll(fresh);
+        _currentIndex++;
+        _emitState();
+        await _playTrackAtCurrentIndex();
+        return;
+      }
+      return;
     } else {
       return;
     }
@@ -703,6 +779,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     _queue.clear();
     _currentIndex = -1;
     _currentSong = null;
+    _isAutoMix = false;
+    _mixSeedTitle = null;
     _emitState();
   }
 
