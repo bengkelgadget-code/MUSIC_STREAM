@@ -140,16 +140,21 @@ MuxedStreamInfo selectMuxedStreamByFormat(
   if (list.isEmpty) throw StateError('No muxed streams available');
   switch (format) {
     case 'Hemat Data':
+      // Bitrate terendah untuk penghematan kuota maksimal
       list.sort((a, b) => a.bitrate.compareTo(b.bitrate));
       return list.first;
     case 'Seimbang':
-      list.sort((a, b) => (a.bitrate.kiloBitsPerSecond - 600)
-          .abs()
-          .compareTo((b.bitrate.kiloBitsPerSecond - 600).abs()));
-      return list.first;
     case 'Tertinggi':
     default:
-      list.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      // Untuk audio playback, track AAC maksimum di progressive muxed adalah 128 kbps (biasanya pada 360p / itag 18).
+      // Memilih resolusi lebih tinggi (720p/1080p) hanya membuang kuota data video tanpa meningkatkan kualitas audio.
+      final under750k =
+          list.where((s) => s.bitrate.kiloBitsPerSecond <= 750).toList();
+      if (under750k.isNotEmpty) {
+        under750k.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+        return under750k.first;
+      }
+      list.sort((a, b) => a.bitrate.compareTo(b.bitrate));
       return list.first;
   }
 }

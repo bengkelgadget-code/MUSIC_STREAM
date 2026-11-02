@@ -246,6 +246,63 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
     );
   }
 
+  Future<void> _downloadSong(BuildContext context, Song song) async {
+    final cacheService = ref.read(cacheServiceProvider);
+    final youTubeService = ref.read(youtubeServiceProvider);
+
+    final isCached = await cacheService.isCached(song);
+    if (isCached) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('"${song.title}" sudah tersimpan di cache offline.'),
+            backgroundColor: const Color(0xFF282828),
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Mengunduh "${song.title}" untuk offline...'),
+          backgroundColor: const Color(0xFF282828),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+
+    try {
+      final stream = await youTubeService.resolveStreamUrl(song.videoId);
+      await cacheService.cacheSong(song, stream.url, headers: stream.headers);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('"${song.title}" berhasil diunduh untuk offline!'),
+            backgroundColor: const Color(0xFF1DB954),
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal mengunduh "${song.title}": $e'),
+            backgroundColor: Colors.redAccent,
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   Widget _buildTrendingSection() {
     return FutureBuilder<List<Song>>(
       future: _trendingFuture,
@@ -365,6 +422,7 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                   onAddToPlaylist: () {
                     _showAddToPlaylistDialog(context, song);
                   },
+                  onDownload: () => _downloadSong(context, song),
                 );
               },
             ),
@@ -728,6 +786,7 @@ class _HomeSearchScreenState extends ConsumerState<HomeSearchScreen> {
                     onAddToPlaylist: () {
                       _showAddToPlaylistDialog(context, song);
                     },
+                    onDownload: () => _downloadSong(context, song),
                   );
                 },
               );

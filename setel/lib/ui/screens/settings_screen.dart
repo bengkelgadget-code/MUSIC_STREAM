@@ -141,7 +141,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   int _cacheSizeBytes = 0;
   bool _isLoadingCache = true;
-  String _appVersion = '1.3.5+23';
+  String _appVersion = '1.3.6+24';
 
   @override
   void initState() {
@@ -436,12 +436,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _getStreamFormatSubtitle(String format) {
     switch (format) {
       case 'Hemat Data':
-        return 'Hemat Data (Bitrate terendah)';
+        return 'Hemat Data (Bitrate terendah untuk kuota minim)';
       case 'Seimbang':
-        return 'Seimbang (Audio-only ≤ 128 kbps)';
+        return 'Seimbang (Kualitas optimal & efisien kuota)';
       case 'Tertinggi':
       default:
-        return 'Tertinggi (Audio-only kualitas terbaik)';
+        return 'Tertinggi (Audio AAC 128 kbps kualitas jernih)';
     }
   }
 
@@ -525,6 +525,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               tooltip: 'Perbarui ukuran cache',
               onPressed: _loadCacheSize,
             ),
+          ),
+          SwitchListTile(
+            // ignore: deprecated_member_use
+            activeColor: const Color(0xFF1DB954),
+            secondary: const Icon(Icons.cloud_download_outlined,
+                color: Colors.white70),
+            title: const Text('Otomatis Simpan Cache saat Memutar',
+                style: TextStyle(color: Colors.white)),
+            subtitle: const Text(
+              'Otomatis unduh lagu yang sedang diputar ke memori offline. Nonaktifkan (hemat kuota) agar kuota tidak terpakai ganda di latar belakang.',
+              style: TextStyle(color: Colors.white38, fontSize: 13),
+            ),
+            value: (box?.get('auto_cache_enabled', defaultValue: false)
+                    as bool?) ??
+                false,
+            onChanged: (val) async {
+              if (Hive.isBoxOpen(BOX_SETTINGS)) {
+                await Hive.box(BOX_SETTINGS).put('auto_cache_enabled', val);
+              }
+              setState(() {});
+            },
           ),
           ListTile(
             leading: const Icon(Icons.tune, color: Colors.white70),

@@ -13,6 +13,9 @@ abstract class CacheService {
   /// Kembalikan file cache jika ada & masih valid, null jika tidak.
   Future<File?> getCached(Song song);
 
+  /// Cek apakah lagu sudah tersimpan di cache lokal.
+  Future<bool> isCached(Song song);
+
   /// Download stream ke file lokal saat lagu diputar. Dipanggil otomatis oleh AudioPlayerService.
   Future<File> cacheSong(Song song, Uri streamUrl,
       {Map<String, String>? headers});
@@ -29,6 +32,7 @@ abstract class CacheService {
 
 class CacheServiceImpl implements CacheService {
   Directory? _cacheDirectory;
+  final Set<String> _cancelledVideoIds = <String>{};
 
   CacheServiceImpl({Dio? dio, Directory? cacheDirectory})
       : _cacheDirectory = cacheDirectory;
@@ -79,7 +83,14 @@ class CacheServiceImpl implements CacheService {
   }
 
   @override
+  Future<bool> isCached(Song song) async {
+    final file = await getCached(song);
+    return file != null;
+  }
+
+  @override
   Future<void> cancelCache(Song song) async {
+    _cancelledVideoIds.add(song.videoId);
     try {
       final cacheDir = await _getCacheDir();
       final tempFile = File('${cacheDir.path}/${song.videoId}.tmp');
@@ -111,6 +122,8 @@ class CacheServiceImpl implements CacheService {
       return targetFile;
     }
 
+    _cancelledVideoIds.remove(song.videoId);
+
     // Download stream audio ke temporary file lalu rename (atomic)
     // Gunakan HttpClient dengan chunk 512KB & auto-retry untuk performa maksimal
     final tempFile = File('${cacheDir.path}/${song.videoId}.tmp');
@@ -124,11 +137,20 @@ class CacheServiceImpl implements CacheService {
 
       try {
         while (true) {
+          if (_cancelledVideoIds.contains(song.videoId)) {
+            debugPrint('CacheService: Download dibatalkan untuk ${song.videoId}.');
+            client.close(force: true);
+            break;
+          }
           final to = current + chunkSize - 1;
           int retryCount = 0;
           bool chunkSuccess = false;
 
           while (retryCount < 3 && !chunkSuccess) {
+            if (_cancelledVideoIds.contains(song.videoId)) {
+              client.close(force: true);
+              break;
+            }
             try {
               final req = await client.getUrl(streamUrl);
               headers?.forEach((k, v) => req.headers.set(k, v));
@@ -155,6 +177,7 @@ class CacheServiceImpl implements CacheService {
 
               int chunkBytes = 0;
               await for (final data in resp) {
+                if (_cancelledVideoIds.contains(song.videoId)) break;
                 sink.add(data);
                 chunkBytes += data.length;
               }
@@ -185,7 +208,16 @@ class CacheServiceImpl implements CacheService {
       } finally {
         await sink.flush();
         await sink.close();
-        client.close();
+        client.close(force: true);
+      }
+
+      if (_cancelledVideoIds.contains(song.videoId)) {
+        if (await tempFile.exists()) {
+          try {
+            await tempFile.delete();
+          } catch (_) {}
+        }
+        return File('');
       }
 
       if (await tempFile.exists() && await tempFile.length() > 0) {
@@ -218,6 +250,8 @@ class CacheServiceImpl implements CacheService {
       }
       debugPrint('Gagal meng-cache lagu ${song.videoId}: $e');
       rethrow;
+    } finally {
+      _cancelledVideoIds.remove(song.videoId);
     }
   }
 

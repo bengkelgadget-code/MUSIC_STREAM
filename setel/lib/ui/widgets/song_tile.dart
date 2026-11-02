@@ -16,6 +16,7 @@ class SongTile extends StatelessWidget {
   final VoidCallback? onStartRadio;
   final VoidCallback? onToggleFavorite;
   final VoidCallback? onAddToPlaylist;
+  final VoidCallback? onDownload;
 
   const SongTile({
     super.key,
@@ -30,6 +31,7 @@ class SongTile extends StatelessWidget {
     this.onStartRadio,
     this.onToggleFavorite,
     this.onAddToPlaylist,
+    this.onDownload,
   });
 
   @override
@@ -183,14 +185,19 @@ class SongTile extends StatelessWidget {
               tooltip: isFavorite ? 'Hapus dari Favorit' : 'Tambah ke Favorit',
               onPressed: onToggleFavorite,
             ),
-          if (onPlayNext != null || onStartRadio != null || onAddToPlaylist != null)
+          if (onPlayNext != null ||
+              onStartRadio != null ||
+              onAddToPlaylist != null ||
+              onDownload != null)
             PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, color: Colors.white54, size: 20),
+              icon:
+                  const Icon(Icons.more_vert, color: Colors.white54, size: 20),
               color: const Color(0xFF282828),
               onSelected: (val) {
                 if (val == 'play_next') onPlayNext?.call();
                 if (val == 'start_radio') onStartRadio?.call();
                 if (val == 'add_playlist') onAddToPlaylist?.call();
+                if (val == 'download') onDownload?.call();
               },
               itemBuilder: (context) => [
                 if (onStartRadio != null)
@@ -198,7 +205,8 @@ class SongTile extends StatelessWidget {
                     value: 'start_radio',
                     child: Row(
                       children: [
-                        Icon(Icons.auto_awesome, color: Color(0xFF1DB954), size: 20),
+                        Icon(Icons.auto_awesome,
+                            color: Color(0xFF1DB954), size: 20),
                         SizedBox(width: 10),
                         Text('Putar Mix / Radio',
                             style: TextStyle(color: Colors.white)),
@@ -210,7 +218,8 @@ class SongTile extends StatelessWidget {
                     value: 'play_next',
                     child: Row(
                       children: [
-                        Icon(Icons.playlist_play, color: Colors.white70, size: 20),
+                        Icon(Icons.playlist_play,
+                            color: Colors.white70, size: 20),
                         SizedBox(width: 10),
                         Text('Putar Berikutnya',
                             style: TextStyle(color: Colors.white)),
@@ -222,9 +231,23 @@ class SongTile extends StatelessWidget {
                     value: 'add_playlist',
                     child: Row(
                       children: [
-                        Icon(Icons.playlist_add, color: Colors.white70, size: 20),
+                        Icon(Icons.playlist_add,
+                            color: Colors.white70, size: 20),
                         SizedBox(width: 10),
                         Text('Tambah ke Playlist',
+                            style: TextStyle(color: Colors.white)),
+                      ],
+                    ),
+                  ),
+                if (onDownload != null)
+                  const PopupMenuItem(
+                    value: 'download',
+                    child: Row(
+                      children: [
+                        Icon(Icons.download_for_offline_outlined,
+                            color: Colors.white70, size: 20),
+                        SizedBox(width: 10),
+                        Text('Unduh untuk Offline',
                             style: TextStyle(color: Colors.white)),
                       ],
                     ),

@@ -145,6 +145,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   bool _isAutoMix = false;
   String? _mixSeedTitle;
   int _autoMixSessionId = 0;
+  Song? _currentlyCachingSong;
 
   int _findChapterIndex(Duration pos, List<SongChapter> chapters) {
     if (chapters.isEmpty) return -1;
@@ -223,6 +224,10 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     _audioHandler.onSeekCallback = (position) => seek(position);
     _audioHandler.onStopCallback = () async {
       saveCurrentPosition();
+      if (_currentlyCachingSong != null) {
+        _cacheService?.cancelCache(_currentlyCachingSong!);
+        _currentlyCachingSong = null;
+      }
       try {
         await _player.stop();
       } catch (e) {
@@ -423,6 +428,13 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       processingState: ProcessingState.loading,
     );
 
+    // Batalkan background cache yang mungkin sedang berjalan untuk lagu sebelumnya
+    if (_currentlyCachingSong != null &&
+        _currentlyCachingSong?.videoId != song.videoId) {
+      _cacheService?.cancelCache(_currentlyCachingSong!);
+      _currentlyCachingSong = null;
+    }
+
     // 2. Alur: resolveStreamUrl(videoId) → cek cache → just_audio.setUrl → play → recordPlay
     try {
       File? cachedFile;
@@ -472,19 +484,38 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
             await _player.setAudioSource(audioSource, initialPosition: initPos);
 
-            // Batasi auto-cache: JANGAN auto-cache di background bila durasi > 15 menit (kompilasi panjang)
-            if (song.durationMs <= 15 * 60 * 1000) {
+            // Cek pengaturan auto_cache_enabled (default: false untuk menghemat kuota)
+            final settingsBox =
+                Hive.isBoxOpen(BOX_SETTINGS) ? Hive.box(BOX_SETTINGS) : null;
+            final autoCacheEnabled = (settingsBox?.get('auto_cache_enabled',
+                    defaultValue: false) as bool?) ??
+                false;
+
+            // Batasi auto-cache: HANYA bila diaktifkan pengguna DAN durasi <= 15 menit
+            if (autoCacheEnabled && song.durationMs <= 15 * 60 * 1000) {
               if (_cacheService != null) {
+                _currentlyCachingSong = song;
                 unawaited(_cacheService
                     .cacheSong(song, stream.url, headers: stream.headers)
-                    .catchError((e) {
+                    .then((_) {
+                  if (_currentlyCachingSong?.videoId == song.videoId) {
+                    _currentlyCachingSong = null;
+                  }
+                }).catchError((e) {
                   debugPrint('Background auto-cache dilewati: $e');
-                  return File('');
+                  if (_currentlyCachingSong?.videoId == song.videoId) {
+                    _currentlyCachingSong = null;
+                  }
                 }));
               }
             } else {
-              debugPrint(
-                  'Auto-cache dilewati untuk kompilasi panjang (durasi: ${song.durationMs}ms > 15 menit)');
+              if (!autoCacheEnabled) {
+                debugPrint(
+                    'Auto-cache dilewati: Pengaturan hemat data aktif (hanya streaming porsi yang didengar).');
+              } else {
+                debugPrint(
+                    'Auto-cache dilewati untuk kompilasi panjang (durasi: ${song.durationMs}ms > 15 menit)');
+              }
             }
 
             playSuccess = true;
@@ -774,6 +805,10 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   }
 
   void clearQueue() {
+    if (_currentlyCachingSong != null) {
+      _cacheService?.cancelCache(_currentlyCachingSong!);
+      _currentlyCachingSong = null;
+    }
     _player.stop();
     _audioHandler.clearMediaItem();
     _queue.clear();
