@@ -188,6 +188,21 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       return;
     }
 
+    final reason = await cacheService.cacheSkipReason(song);
+    if (reason != null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(reason),
+            backgroundColor: const Color(0xFF282828),
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -713,6 +728,21 @@ class _PlaylistDetailScreenState
             content: Text('"${song.title}" sudah tersimpan di cache offline.'),
             backgroundColor: const Color(0xFF282828),
             duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    final reason = await cacheService.cacheSkipReason(song);
+    if (reason != null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(reason),
+            backgroundColor: const Color(0xFF282828),
+            duration: const Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
           ),
         );

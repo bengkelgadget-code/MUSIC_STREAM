@@ -219,6 +219,140 @@ void main() {
       await box.put(KEY_CACHE_WIFI_ONLY, false);
     });
 
+    test('cacheSkipReason returns WiFi message when toggle active + mobile, null when on WiFi', () async {
+      final cacheDir = Directory('${tempDir.path}/wifi_reason_cache');
+      if (!cacheDir.existsSync()) cacheDir.createSync(recursive: true);
+
+      final box = Hive.box(BOX_SETTINGS);
+      await box.put(KEY_CACHE_WIFI_ONLY, true);
+
+      final mobileConnectivity = MockConnectivity([ConnectivityResult.mobile]);
+      final cacheServiceMobile = CacheServiceImpl(
+        cacheDirectory: cacheDir,
+        connectivity: mobileConnectivity,
+      );
+
+      final wifiConnectivity = MockConnectivity([ConnectivityResult.wifi]);
+      final cacheServiceWifi = CacheServiceImpl(
+        cacheDirectory: cacheDir,
+        connectivity: wifiConnectivity,
+      );
+
+      const normalSong = Song(
+        videoId: 'normal_song_1',
+        title: 'Normal Song',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+
+      // On mobile + toggle on -> returns WiFi warning message
+      final reasonMobile = await cacheServiceMobile.cacheSkipReason(normalSong);
+      expect(
+        reasonMobile,
+        'Unduhan dilewati: aktifkan WiFi atau matikan "Cache hanya via WiFi" di Pengaturan.',
+      );
+
+      // On WiFi + toggle on -> returns null
+      final reasonWifi = await cacheServiceWifi.cacheSkipReason(normalSong);
+      expect(reasonWifi, isNull);
+
+      await box.put(KEY_CACHE_WIFI_ONLY, false);
+    });
+
+    test('cacheSkipReason returns duration message when durationMs > 15 min (without needing connectivity)', () async {
+      final cacheDir = Directory('${tempDir.path}/duration_reason_cache');
+      if (!cacheDir.existsSync()) cacheDir.createSync(recursive: true);
+
+      // Default constructor without connectivity mock (proves no connectivity needed)
+      final cacheService = CacheServiceImpl(cacheDirectory: cacheDir);
+
+      const longCompilation = Song(
+        videoId: 'compilation_long_1',
+        title: '79 Min Compilation',
+        artist: 'Various',
+        durationMs: 79 * 60 * 1000,
+        thumbnailUrl: '',
+      );
+
+      final reason = await cacheService.cacheSkipReason(longCompilation);
+      expect(reason, 'Kompilasi di atas 15 menit tidak bisa di-cache.');
+    });
+
+    test('cacheSkipReason returns null for normal song on WiFi', () async {
+      final cacheDir = Directory('${tempDir.path}/normal_wifi_cache');
+      if (!cacheDir.existsSync()) cacheDir.createSync(recursive: true);
+
+      final box = Hive.box(BOX_SETTINGS);
+      await box.put(KEY_CACHE_WIFI_ONLY, true);
+
+      final wifiConnectivity = MockConnectivity([ConnectivityResult.wifi]);
+      final cacheService = CacheServiceImpl(
+        cacheDirectory: cacheDir,
+        connectivity: wifiConnectivity,
+      );
+
+      const normalSong = Song(
+        videoId: 'normal_wifi_song',
+        title: 'Normal Song',
+        artist: 'Normal Artist',
+        durationMs: 200000,
+        thumbnailUrl: '',
+      );
+
+      final reason = await cacheService.cacheSkipReason(normalSong);
+      expect(reason, isNull);
+
+      await box.put(KEY_CACHE_WIFI_ONLY, false);
+    });
+
+    test('cacheSong returns File("") on both skip conditions (WiFi & duration)', () async {
+      final cacheDir = Directory('${tempDir.path}/skip_empty_file_cache');
+      if (!cacheDir.existsSync()) cacheDir.createSync(recursive: true);
+
+      final box = Hive.box(BOX_SETTINGS);
+      await box.put(KEY_CACHE_WIFI_ONLY, true);
+
+      final mobileConnectivity = MockConnectivity([ConnectivityResult.mobile]);
+      final cacheServiceMobile = CacheServiceImpl(
+        cacheDirectory: cacheDir,
+        connectivity: mobileConnectivity,
+      );
+
+      const normalSong = Song(
+        videoId: 'skip_test_normal',
+        title: 'Normal Song',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+      const longSong = Song(
+        videoId: 'skip_test_long',
+        title: 'Long Compilation',
+        artist: 'Artist',
+        durationMs: 20 * 60 * 1000,
+        thumbnailUrl: '',
+      );
+
+      // Condition 1: cellular connection when WiFi-only toggle is active
+      final resMobile = await cacheServiceMobile.cacheSong(
+        normalSong,
+        Uri.parse('https://example.com/audio1.m4a'),
+      );
+      expect(resMobile.path, isEmpty);
+      expect(await cacheServiceMobile.isCached(normalSong), isFalse);
+
+      // Condition 2: song duration > 15 minutes
+      final resLong = await cacheServiceMobile.cacheSong(
+        longSong,
+        Uri.parse('https://example.com/audio2.m4a'),
+      );
+      expect(resLong.path, isEmpty);
+      expect(await cacheServiceMobile.isCached(longSong), isFalse);
+
+      await box.put(KEY_CACHE_WIFI_ONLY, false);
+    });
+
     test('recordDataUsage accumulates bytes and resets accurately', () async {
       final box = Hive.box(BOX_SETTINGS);
       await box.put(KEY_DATA_USED_BYTES, 0);

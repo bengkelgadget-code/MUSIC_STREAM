@@ -11,6 +11,11 @@ import '../models/settings.dart';
 import '../models/song.dart';
 
 abstract class CacheService {
+  /// Cek apakah proses cache untuk lagu ini harus dilewati.
+  /// Mengembalikan null bila cache BOLEH jalan; bila tidak,
+  /// mengembalikan pesan siap tampil untuk pengguna.
+  Future<String?> cacheSkipReason(Song song);
+
   /// Kembalikan file cache jika ada & masih valid, null jika tidak.
   Future<File?> getCached(Song song);
 
@@ -110,9 +115,13 @@ class CacheServiceImpl implements CacheService {
   }
 
   @override
-  Future<File> cacheSong(Song song, Uri streamUrl,
-      {Map<String, String>? headers}) async {
-    // 1. Cek toggle "Cache hanya via WiFi"
+  Future<String?> cacheSkipReason(Song song) async {
+    // 1. Batasi kompilasi panjang: lagu > 15 menit tidak bisa di-cache
+    if (song.durationMs > 15 * 60 * 1000) {
+      return 'Kompilasi di atas 15 menit tidak bisa di-cache.';
+    }
+
+    // 2. Cek toggle "Cache hanya via WiFi"
     final settingsBox =
         Hive.isBoxOpen(BOX_SETTINGS) ? Hive.box(BOX_SETTINGS) : null;
     final cacheWifiOnly =
@@ -123,20 +132,25 @@ class CacheServiceImpl implements CacheService {
         final connectivityResult = await _connectivity.checkConnectivity();
         final isWifi = connectivityResult.contains(ConnectivityResult.wifi);
         if (!isWifi) {
-          debugPrint(
-              'CacheService: Caching dilewati karena pengaturan "Cache hanya via WiFi" aktif dan koneksi saat ini bukan WiFi.');
-          return File('');
+          return 'Unduhan dilewati: aktifkan WiFi atau matikan "Cache hanya via WiFi" di Pengaturan.';
         }
       } catch (e) {
         debugPrint('CacheService: Gagal memeriksa koneksi WiFi: $e');
       }
     }
 
-    // 2. Batasi auto-cache: JANGAN auto-cache di background untuk lagu berdurasi > 15 menit (kompilasi panjang)
-    if (song.durationMs > 15 * 60 * 1000) {
-      debugPrint('CacheService: Lewati auto-cache untuk kompilasi panjang (${song.durationMs}ms > 15 menit).');
+    return null;
+  }
+
+  @override
+  Future<File> cacheSong(Song song, Uri streamUrl,
+      {Map<String, String>? headers}) async {
+    final skipReason = await cacheSkipReason(song);
+    if (skipReason != null) {
+      debugPrint('CacheService: Caching dilewati ($skipReason).');
       return File('');
     }
+
     final cacheDir = await _getCacheDir();
     final targetFile = File('${cacheDir.path}/${song.videoId}.m4a');
 
