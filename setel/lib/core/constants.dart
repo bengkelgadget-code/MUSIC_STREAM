@@ -1,3 +1,5 @@
+import 'package:hive/hive.dart';
+
 // ignore_for_file: constant_identifier_names
 
 const String YOUTUBE_API_KEY = 'ISI_DI_SINI';
@@ -16,3 +18,17 @@ const String BOX_PLAY_COUNTS = 'play_counts';
 const String BOX_SONG_CHAPTERS = 'song_chapters';
 const String BOX_DISCOVERY_CONFIG = 'discovery_config';
 const String BOX_PLAYBACK_POSITIONS = 'playback_positions';
+
+// Settings Keys
+const String KEY_DATA_USED_BYTES = 'data_used_bytes';
+const String KEY_CACHE_WIFI_ONLY = 'cache_wifi_only';
+
+/// Catat akumulasi pemakaian data (streaming & cache) ke Hive box settings
+void recordDataUsage(int bytes) {
+  if (bytes <= 0) return;
+  if (!Hive.isBoxOpen(BOX_SETTINGS)) return;
+  final box = Hive.box(BOX_SETTINGS);
+  final current = (box.get(KEY_DATA_USED_BYTES, defaultValue: 0) as int?) ?? 0;
+  box.put(KEY_DATA_USED_BYTES, current + bytes);
+}
+

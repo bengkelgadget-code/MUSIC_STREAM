@@ -141,7 +141,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   int _cacheSizeBytes = 0;
   bool _isLoadingCache = true;
-  String _appVersion = '1.3.6+24';
+  String _appVersion = '1.3.7+25';
 
   @override
   void initState() {
@@ -364,17 +364,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       (
         'Tertinggi',
         'Tertinggi (Default)',
-        'Kualitas audio terbaik tanpa batas'
+        'Bitrate audio tertinggi kualitas penuh'
       ),
       (
         'Seimbang',
         'Seimbang',
-        'Format standar (Hemat kuota & suara jernih)'
+        'Format Opus <=128 kbps (Hemat kuota & suara jernih)'
       ),
       (
         'Hemat Data',
         'Hemat Data',
-        'Bitrate terendah untuk kuota minim'
+        'Bitrate terendah Opus (Penghematan kuota maksimal)'
       ),
     ];
 
@@ -436,12 +436,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _getStreamFormatSubtitle(String format) {
     switch (format) {
       case 'Hemat Data':
-        return 'Hemat Data (Bitrate terendah untuk kuota minim)';
+        return 'Hemat Data (Bitrate terendah Opus webm)';
       case 'Seimbang':
-        return 'Seimbang (Kualitas optimal & efisien kuota)';
+        return 'Seimbang (Format Opus <=128 kbps hemat kuota & jernih)';
       case 'Tertinggi':
       default:
-        return 'Tertinggi (Audio AAC 128 kbps kualitas jernih)';
+        return 'Tertinggi (Bitrate audio tertinggi)';
     }
   }
 
@@ -458,6 +458,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final streamFormat =
         (box?.get('stream_format', defaultValue: 'Tertinggi') as String?) ??
             'Tertinggi';
+    final dataUsedBytes =
+        (box?.get(KEY_DATA_USED_BYTES, defaultValue: 0) as int?) ?? 0;
 
     final isSleepTimerActive = playerState.sleepTimerEndTime != null ||
         playerState.sleepAfterCurrentTrack;
@@ -547,6 +549,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {});
             },
           ),
+          SwitchListTile(
+            // ignore: deprecated_member_use
+            activeColor: const Color(0xFF1DB954),
+            secondary: const Icon(Icons.wifi_outlined, color: Colors.white70),
+            title: const Text('Cache Hanya via WiFi',
+                style: TextStyle(color: Colors.white)),
+            subtitle: const Text(
+              'Hanya unduh cache lagu saat terhubung ke WiFi. Bila menggunakan data seluler, unduhan cache offline dilewati untuk menghemat kuota.',
+              style: TextStyle(color: Colors.white38, fontSize: 13),
+            ),
+            value: (box?.get(KEY_CACHE_WIFI_ONLY, defaultValue: false)
+                    as bool?) ??
+                false,
+            onChanged: (val) async {
+              if (Hive.isBoxOpen(BOX_SETTINGS)) {
+                await Hive.box(BOX_SETTINGS).put(KEY_CACHE_WIFI_ONLY, val);
+              }
+              setState(() {});
+            },
+          ),
           ListTile(
             leading: const Icon(Icons.tune, color: Colors.white70),
             title: const Text('Batas Kapasitas Cache',
@@ -592,6 +614,37 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             trailing: const Icon(Icons.chevron_right, color: Colors.white38),
             onTap: () => _showStreamFormatDialog(context),
+          ),
+          ListTile(
+            leading:
+                const Icon(Icons.data_usage_outlined, color: Colors.white70),
+            title: Text(
+              'Pemakaian data: ${(dataUsedBytes / (1024 * 1024)).toStringAsFixed(1)} MB',
+              style: const TextStyle(color: Colors.white),
+            ),
+            subtitle: const Text(
+              'Total estimasi kuota terpakai streaming & cache audio',
+              style: TextStyle(color: Colors.white38, fontSize: 13),
+            ),
+            trailing: TextButton(
+              onPressed: () async {
+                if (Hive.isBoxOpen(BOX_SETTINGS)) {
+                  await Hive.box(BOX_SETTINGS).put(KEY_DATA_USED_BYTES, 0);
+                }
+                setState(() {});
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content:
+                          Text('Statistik pemakaian data berhasil direset ke 0 MB'),
+                      backgroundColor: Color(0xFF282828),
+                    ),
+                  );
+                }
+              },
+              child: const Text('Reset',
+                  style: TextStyle(color: Color(0xFF1DB954))),
+            ),
           ),
 
           const Divider(color: Colors.white10),

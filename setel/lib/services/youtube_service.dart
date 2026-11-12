@@ -106,6 +106,12 @@ List<SongChapter> parseChaptersFromDescription(String description) {
   return uniqueChapters;
 }
 
+bool _isOpusStream(AudioStreamInfo s) {
+  final containerName = s.container.name.toLowerCase();
+  final codec = s.audioCodec.toLowerCase();
+  return containerName == 'webm' || codec.contains('opus');
+}
+
 AudioStreamInfo selectStreamByFormat(
   Iterable<AudioStreamInfo> streams,
   String format,
@@ -114,9 +120,25 @@ AudioStreamInfo selectStreamByFormat(
   if (list.isEmpty) throw StateError('No streams available');
   switch (format) {
     case 'Hemat Data':
+      // 'Hemat Data': pilih bitrate terendah DI ANTARA stream Opus (container webm / codec opus) bila ada;
+      // bila tak ada Opus, baru bitrate terendah apa pun.
+      final opusList = list.where(_isOpusStream).toList();
+      if (opusList.isNotEmpty) {
+        opusList.sort((a, b) => a.bitrate.compareTo(b.bitrate));
+        return opusList.first;
+      }
       list.sort((a, b) => a.bitrate.compareTo(b.bitrate));
       return list.first;
     case 'Seimbang':
+      // 'Seimbang': pilih bitrate tertinggi <=128 kbps DI ANTARA stream Opus bila ada;
+      // fallback ke aturan lama bila tak ada.
+      final opusUnder128 = list
+          .where((s) => _isOpusStream(s) && s.bitrate.kiloBitsPerSecond <= 128)
+          .toList();
+      if (opusUnder128.isNotEmpty) {
+        opusUnder128.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+        return opusUnder128.first;
+      }
       final under128 =
           list.where((s) => s.bitrate.kiloBitsPerSecond <= 128).toList();
       if (under128.isNotEmpty) {
@@ -127,6 +149,7 @@ AudioStreamInfo selectStreamByFormat(
       return list.first;
     case 'Tertinggi':
     default:
+      // 'Tertinggi': tetap bitrate tertinggi (tanpa preferensi codec).
       list.sort((a, b) => b.bitrate.compareTo(a.bitrate));
       return list.first;
   }
@@ -571,25 +594,8 @@ class YouTubeServiceImpl implements YouTubeService {
           requireWatchPage: false,
           ytClients: [candidate.client],
         );
-        // Prioritaskan stream progressive muxed (MP4 itag 18) yang memiliki 'ratebypass=yes'.
-        // YouTube CDN membatasi stream DASH audio-only tanpa PO-token pada tepat 1MB (403 Forbidden).
-        // Stream muxed progressive tidak memiliki batasan 1MB, mendukung seek acak tanpa jeda,
-        // dan ExoPlayer/just_audio hanya men-decode track AAC audio-nya.
-        if (manifest.muxed.isNotEmpty) {
-          final muxedStream =
-              selectMuxedStreamByFormat(manifest.muxed, streamFormat);
-          debugPrint(
-              'Berhasil me-resolve stream muxed (ratebypass=yes) untuk videoId: $videoId '
-              'menggunakan ${candidate.name} (format: $streamFormat, tag: ${muxedStream.tag}, ${muxedStream.bitrate.kiloBitsPerSecond} kbps, ${muxedStream.size.totalBytes} bytes)');
-          return AudioStreamResult(
-            url: muxedStream.url,
-            headers: {'User-Agent': candidate.userAgent},
-            clientName: candidate.name,
-            totalBytes: muxedStream.size.totalBytes,
-            contentType: 'audio/mp4',
-          );
-        }
-
+        // Prioritaskan stream audio-only (terutama Opus webm) sesuai format yang dipilih.
+        // Stream audio-only murni menghemat data 70-90% dibanding stream muxed yang menyertakan track video.
         final audioStreams = manifest.audioOnly;
         if (audioStreams.isNotEmpty) {
           final audioStream = selectStreamByFormat(audioStreams, streamFormat);
@@ -597,13 +603,29 @@ class YouTubeServiceImpl implements YouTubeService {
               audioStream.container.name == 'webm' ? 'audio/webm' : 'audio/mp4';
           debugPrint(
               'Berhasil me-resolve stream audio untuk videoId: $videoId '
-              'menggunakan ${candidate.name} (format: $streamFormat, ${audioStream.container.name}, tag: ${audioStream.tag}, ${audioStream.bitrate.kiloBitsPerSecond} kbps, ${audioStream.size.totalBytes} bytes)');
+              'menggunakan ${candidate.name} (format: $streamFormat, container: ${audioStream.container.name}, codec: ${audioStream.audioCodec}, tag: ${audioStream.tag}, ${audioStream.bitrate.kiloBitsPerSecond} kbps, ${audioStream.size.totalBytes} bytes)');
           return AudioStreamResult(
             url: audioStream.url,
             headers: {'User-Agent': candidate.userAgent},
             clientName: candidate.name,
             totalBytes: audioStream.size.totalBytes,
             contentType: contentType,
+          );
+        }
+
+        // Fallback: Jika tidak ada audioOnly pada klien ini, gunakan stream progressive muxed
+        if (manifest.muxed.isNotEmpty) {
+          final muxedStream =
+              selectMuxedStreamByFormat(manifest.muxed, streamFormat);
+          debugPrint(
+              'Berhasil me-resolve stream muxed (fallback) untuk videoId: $videoId '
+              'menggunakan ${candidate.name} (format: $streamFormat, tag: ${muxedStream.tag}, ${muxedStream.bitrate.kiloBitsPerSecond} kbps, ${muxedStream.size.totalBytes} bytes)');
+          return AudioStreamResult(
+            url: muxedStream.url,
+            headers: {'User-Agent': candidate.userAgent},
+            clientName: candidate.name,
+            totalBytes: muxedStream.size.totalBytes,
+            contentType: 'audio/mp4',
           );
         }
       } catch (e) {

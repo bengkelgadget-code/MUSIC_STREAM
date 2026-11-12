@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
@@ -33,9 +34,14 @@ abstract class CacheService {
 class CacheServiceImpl implements CacheService {
   Directory? _cacheDirectory;
   final Set<String> _cancelledVideoIds = <String>{};
+  final Connectivity _connectivity;
 
-  CacheServiceImpl({Dio? dio, Directory? cacheDirectory})
-      : _cacheDirectory = cacheDirectory;
+  CacheServiceImpl({
+    Dio? dio,
+    Directory? cacheDirectory,
+    Connectivity? connectivity,
+  })  : _cacheDirectory = cacheDirectory,
+        _connectivity = connectivity ?? Connectivity();
 
   Future<Directory> _getCacheDir() async {
     if (_cacheDirectory != null) return _cacheDirectory!;
@@ -106,7 +112,27 @@ class CacheServiceImpl implements CacheService {
   @override
   Future<File> cacheSong(Song song, Uri streamUrl,
       {Map<String, String>? headers}) async {
-    // Batasi auto-cache: JANGAN auto-cache di background untuk lagu berdurasi > 15 menit (kompilasi panjang)
+    // 1. Cek toggle "Cache hanya via WiFi"
+    final settingsBox =
+        Hive.isBoxOpen(BOX_SETTINGS) ? Hive.box(BOX_SETTINGS) : null;
+    final cacheWifiOnly =
+        (settingsBox?.get(KEY_CACHE_WIFI_ONLY, defaultValue: false) as bool?) ??
+            false;
+    if (cacheWifiOnly) {
+      try {
+        final connectivityResult = await _connectivity.checkConnectivity();
+        final isWifi = connectivityResult.contains(ConnectivityResult.wifi);
+        if (!isWifi) {
+          debugPrint(
+              'CacheService: Caching dilewati karena pengaturan "Cache hanya via WiFi" aktif dan koneksi saat ini bukan WiFi.');
+          return File('');
+        }
+      } catch (e) {
+        debugPrint('CacheService: Gagal memeriksa koneksi WiFi: $e');
+      }
+    }
+
+    // 2. Batasi auto-cache: JANGAN auto-cache di background untuk lagu berdurasi > 15 menit (kompilasi panjang)
     if (song.durationMs > 15 * 60 * 1000) {
       debugPrint('CacheService: Lewati auto-cache untuk kompilasi panjang (${song.durationMs}ms > 15 menit).');
       return File('');
@@ -221,6 +247,10 @@ class CacheServiceImpl implements CacheService {
       }
 
       if (await tempFile.exists() && await tempFile.length() > 0) {
+        // Catat pemakaian data akumulatif dari proses unduh cache
+        final downloadedBytes = await tempFile.length();
+        recordDataUsage(downloadedBytes);
+
         if (await targetFile.exists()) {
           await targetFile.delete();
         }

@@ -519,6 +519,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
             }
 
             playSuccess = true;
+            // Catat pemakaian data streaming (per pemutaran baru, dari totalBytes stream)
+            recordDataUsage(stream.totalBytes);
             debugPrint(
                 'Berhasil memuat stream videoId: ${song.videoId} menggunakan klien: ${stream.clientName}');
             break; // BERHENTI di klien pertama yang berhasil
