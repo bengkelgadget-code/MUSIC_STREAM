@@ -27,10 +27,12 @@ class FakeConnectivity implements Connectivity {
 
 class TrackingYouTubeService implements YouTubeService {
   int resolveCallCount = 0;
+  int resolveNonOpusCallCount = 0;
   final List<int> clientStartIndices = [];
   final Future<AudioStreamResult> Function(String videoId, int clientStartIndex)? onResolve;
+  final Future<AudioStreamResult> Function(String videoId, int clientStartIndex)? onResolveNonOpus;
 
-  TrackingYouTubeService({this.onResolve});
+  TrackingYouTubeService({this.onResolve, this.onResolveNonOpus});
 
   @override
   Future<AudioStreamResult> resolveStreamUrl(String videoId,
@@ -44,6 +46,21 @@ class TrackingYouTubeService implements YouTubeService {
       'Gagal memuat stream audio untuk video $videoId: 403 Forbidden',
       const HttpException('403 Forbidden'),
       ['androidSdkless: 403 Forbidden', 'ios: 403 Forbidden'],
+    );
+  }
+
+  @override
+  Future<AudioStreamResult> resolveNonOpusStream(String videoId,
+      {int clientStartIndex = 0}) async {
+    resolveNonOpusCallCount++;
+    if (onResolveNonOpus != null) {
+      return onResolveNonOpus!(videoId, clientStartIndex);
+    }
+    return AudioStreamResult(
+      url: Uri.parse('https://example.com/audio.m4a'),
+      headers: {'User-Agent': 'test'},
+      tag: 140,
+      codec: 'mp4a.40.2',
     );
   }
 
@@ -485,9 +502,9 @@ void main() {
 
       await player.playSong(song);
 
-      // Tepat 1x resolve pertama + 1x resolve ulang dengan clientStartIndex: 1
+      // Tepat 1x resolve pertama + 1x resolve ulang dengan clientStartIndex: 0
       expect(resolveCalls, 2);
-      expect(startIndices, [0, 1]);
+      expect(startIndices, [0, 0]);
 
       // Tepat 1x setAudioSource pertama + 1x retry setAudioSource
       expect(setSourceCount, 2);
@@ -564,6 +581,153 @@ void main() {
       );
       expect(lastErrState.playbackError, isNot(contains('PlatformException')));
       expect(lastErrState.playbackError, isNot(contains('(0)')));
+    });
+  });
+
+  group('v1.3.12: Diagnostic Holder, Opus Fallback, and Chapter Auto-skip', () {
+    test('ChunkErrorInfo 403 maps to bot protection message', () {
+      final chunkErr = ChunkErrorInfo(
+        videoId: 'v_chunk_403',
+        statusCode: 403,
+        range: 'bytes=0-524287',
+        clientName: 'androidSdkless',
+        at: DateTime.now(),
+      );
+      final msg = classifyPlaybackError(
+        PlatformException(code: '0', message: 'Source error'),
+        songTitle: 'Test Song',
+        lastChunkError: chunkErr,
+      );
+      expect(msg, contains('proteksi bot'));
+      expect(msg, isNot(contains('kedaluwarsa')));
+    });
+
+    test('ChunkErrorInfo 404 maps to stream audio not found message', () {
+      final chunkErr = ChunkErrorInfo(
+        videoId: 'v_chunk_404',
+        statusCode: 404,
+        range: 'bytes=0-524287',
+        clientName: 'androidSdkless',
+        at: DateTime.now(),
+      );
+      final msg = classifyPlaybackError(
+        PlatformException(code: '0', message: 'Source error'),
+        songTitle: 'Test Song',
+        lastChunkError: chunkErr,
+      );
+      expect(msg, '"Test Song" tidak dapat diputar (stream audio video ini tidak ditemukan).');
+      expect(msg, isNot(contains('kedaluwarsa')));
+    });
+
+    test('hasSuccessfulPlayThisSession: true appends helpful suggestion', () {
+      final msg = classifyPlaybackError(
+        PlatformException(code: '0', message: 'Source error'),
+        songTitle: 'Test Song',
+        hasSuccessfulPlayThisSession: true,
+      );
+      expect(msg, contains('Lagu lain di sesi ini berhasil diputar — kemungkinan videonya yang bermasalah, coba lagu lain.'));
+    });
+
+    test('Compilation song: auto-skip advances track index, ignoring chapters', () async {
+      final mockAudioPlayer = MockAudioPlayer();
+      final youTubeService = TrackingYouTubeService(
+        onResolve: (id, start) async => AudioStreamResult(
+          url: Uri.parse('https://example.com/audio.m4a'),
+          headers: {},
+        ),
+      );
+      final player = AudioPlayerServiceImpl(
+        player: mockAudioPlayer,
+        audioHandler: SetelAudioHandler(),
+        youTubeService: youTubeService,
+        connectivity: FakeConnectivity([ConnectivityResult.wifi]),
+      );
+
+      PlayerState? lastState;
+      final sub = player.playerState.listen((s) => lastState = s);
+      addTearDown(sub.cancel);
+
+      const song1 = Song(
+        videoId: 'compilation_1',
+        title: 'Compilation 1',
+        artist: 'Artist',
+        durationMs: 900000,
+        thumbnailUrl: '',
+      );
+      const song2 = Song(
+        videoId: 'normal_2',
+        title: 'Normal Song 2',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+
+      await player.playQueue([song1, song2]);
+
+      await player.next(fromAutoSkip: true);
+      expect(lastState?.currentSong?.videoId, 'normal_2');
+    });
+
+    test('Opus stream failure triggers fallback 1x to resolveNonOpusStream', () async {
+      final mockAudioPlayer = MockAudioPlayer();
+      int opusResolveCount = 0;
+      int nonOpusResolveCount = 0;
+
+      final youTubeService = TrackingYouTubeService(
+        onResolve: (id, start) async {
+          opusResolveCount++;
+          return AudioStreamResult(
+            url: Uri.parse('https://example.com/audio.webm'),
+            headers: {},
+            tag: 249,
+            codec: 'opus',
+          );
+        },
+        onResolveNonOpus: (id, start) async {
+          nonOpusResolveCount++;
+          return AudioStreamResult(
+            url: Uri.parse('https://example.com/audio.m4a'),
+            headers: {},
+            tag: 140,
+            codec: 'mp4a.40.2',
+          );
+        },
+      );
+
+      int setSourceCount = 0;
+      mockAudioPlayer.onSetAudioSource = (source) async {
+        setSourceCount++;
+        if (setSourceCount == 1) {
+          throw PlatformException(code: '0', message: 'Source error');
+        }
+        return Duration.zero;
+      };
+
+      final player = AudioPlayerServiceImpl(
+        player: mockAudioPlayer,
+        audioHandler: SetelAudioHandler(),
+        youTubeService: youTubeService,
+        connectivity: FakeConnectivity([ConnectivityResult.wifi]),
+      );
+
+      PlayerState? lastState;
+      final sub = player.playerState.listen((s) => lastState = s);
+      addTearDown(sub.cancel);
+
+      const song = Song(
+        videoId: 'raim_laode_album',
+        title: 'Raim Laode Full Album',
+        artist: 'Raim Laode',
+        durationMs: 1800000,
+        thumbnailUrl: '',
+      );
+
+      await player.playSong(song);
+
+      expect(opusResolveCount, 1);
+      expect(nonOpusResolveCount, 1);
+      expect(setSourceCount, 2);
+      expect(lastState?.playbackError, isNull);
     });
   });
 }

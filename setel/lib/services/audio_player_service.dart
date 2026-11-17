@@ -111,7 +111,7 @@ abstract class AudioPlayerService {
   Future<void> playSong(Song song, {Duration? initialPosition, bool autoMix = false});
   Future<void> playQueue(List<Song> songs, {int startIndex = 0, Duration? initialPosition});
   Future<void> togglePlayPause();
-  Future<void> next();
+  Future<void> next({bool fromAutoSkip = false});
   Future<void> previous();
   Future<void> seek(Duration position);
   Future<void> setShuffle(bool enabled);
@@ -162,6 +162,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   bool _isRecoveringPlayback = false;
   int _recoveryAttempts = 0;
   int _consecutiveFailures = 0;
+  bool _hasSuccessfulPlayThisSession = false;
 
   bool _isSourceError(Object error) {
     Object current = error;
@@ -178,6 +179,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     }
     final errStr = error.toString().toLowerCase();
     return errStr.contains('source error') ||
+        errStr.contains('streamchunkexception') ||
         (error is PlatformException && error.code == '0');
   }
 
@@ -222,13 +224,13 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         processingState: state.processingState,
       );
     }, onError: (err, stackTrace) {
-      _handlePlaybackError('PlayerStateStream error: $err', stackTrace);
+      _handlePlaybackError(err, stackTrace);
     });
 
     _playbackEventSub = _player.playbackEventStream.listen((event) {
       // Stream event pemutaran normal
     }, onError: (err, stackTrace) {
-      _handlePlaybackError('PlaybackEventStream error: $err', stackTrace);
+      _handlePlaybackError(err, stackTrace);
     });
 
     _positionSub = _player.positionStream.listen((pos) {
@@ -315,7 +317,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     final song = _currentSong;
     final currentPos = _player.position;
     debugPrint(
-        '[AudioPlayerService] track error: videoId: ${song?.videoId}, title: ${song?.title}, position: $currentPos, error: $error');
+        '[AudioPlayerService] track error: videoId: ${song?.videoId}, title: ${song?.title}, position: $currentPos, error: $error\n$stackTrace');
 
     if (song == null || _isRecoveringPlayback) return;
 
@@ -327,6 +329,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       try {
         final freshStream = await _youTubeService.resolveStreamUrl(
           song.videoId,
+          clientStartIndex: 0,
         );
         final audioSource = YouTubeAudioSource(
           uri: freshStream.url,
@@ -335,9 +338,19 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           contentType: freshStream.contentType,
           tag: song,
           videoId: song.videoId,
-          onReResolveUrl: () async {
+          clientName: freshStream.clientName,
+          isOpus: freshStream.isOpus,
+          onReResolveUrl: ({bool fallbackNonOpus = false}) async {
+            if (fallbackNonOpus) {
+              final nonOpus = await _youTubeService.resolveNonOpusStream(
+                song.videoId,
+                clientStartIndex: 0,
+              );
+              return (url: nonOpus.url, headers: nonOpus.headers);
+            }
             final reStream = await _youTubeService.resolveStreamUrl(
               song.videoId,
+              clientStartIndex: 0,
             );
             return (url: reStream.url, headers: reStream.headers);
           },
@@ -345,6 +358,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         await _player.setAudioSource(audioSource, initialPosition: currentPos);
         await _player.play();
         _isRecoveringPlayback = false;
+        clearPlaybackError();
         debugPrint(
             '[AudioPlayerService] Auto-resume berhasil untuk videoId: ${song.videoId} pada posisi $currentPos');
         return;
@@ -355,8 +369,61 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       }
     }
 
-    _playbackError = classifyPlaybackError(error, songTitle: song.title);
+    // Bila resume gagal (atau _recoveryAttempts sudah 1), samakan dengan alur gagal di catch _playTrackAtCurrentIndex:
+    try {
+      await _player.stop();
+    } catch (_) {}
+
+    _audioHandler.updatePlaybackState(
+      isPlaying: false,
+      position: Duration.zero,
+      duration: Duration.zero,
+      processingState: ProcessingState.idle,
+    );
+
+    final chunkErr = YouTubeAudioSource.lastChunkError;
+    String stage = 'tengah';
+    String httpStatus = '-';
+    if (chunkErr != null) {
+      stage = (chunkErr.range.startsWith('0-') || chunkErr.range.startsWith('bytes=0-'))
+          ? 'chunk-pertama'
+          : 'tengah';
+      if (chunkErr.statusCode != null) {
+        httpStatus = '${chunkErr.statusCode}';
+      }
+    }
+    debugPrint(
+        '[AudioPlayerService] DIAGNOSIS videoId=${song.videoId} stage=$stage client=androidSdkless http=$httpStatus');
+
+    final classifiedError = classifyPlaybackError(
+      error,
+      songTitle: song.title,
+      lastChunkError: chunkErr,
+      hasSuccessfulPlayThisSession: _hasSuccessfulPlayThisSession,
+    );
+    _playbackError = classifiedError;
+    _consecutiveFailures++;
     _emitState();
+
+    debugPrint(
+        '[AudioPlayerService] Lagu "${song.title}" (${song.videoId}) gagal diputar via async error: $classifiedError (gagal beruntun: $_consecutiveFailures/3)');
+
+    if (_consecutiveFailures >= 3) {
+      debugPrint(
+          '[AudioPlayerService] 3 lagu beruntun gagal diputar. Menghentikan antrean pemutaran.');
+      return;
+    }
+
+    final hasNext = _currentIndex < _queue.length - 1 ||
+        (_repeatMode == RepeatMode.all && _queue.isNotEmpty) ||
+        (_isAutoMix && _queue.isNotEmpty);
+
+    if (hasNext) {
+      debugPrint(
+          '[AudioPlayerService] Auto-skip ke lagu berikutnya dari _handlePlaybackError...');
+      await Future.delayed(const Duration(milliseconds: 300));
+      await next(fromAutoSkip: true);
+    }
   }
 
   void _emitState() {
@@ -474,6 +541,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   Future<void> playQueue(List<Song> songs, {int startIndex = 0, Duration? initialPosition}) async {
     if (songs.isEmpty) return;
     _consecutiveFailures = 0;
+    _hasSuccessfulPlayThisSession = false;
     saveCurrentPosition();
     _pendingInitialPosition = initialPosition;
     _isAutoMix = false;
@@ -498,6 +566,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     _currentSong = song;
     _playbackError = null;
     _recoveryAttempts = 0;
+    YouTubeAudioSource.resetLastChunkError();
 
     // Reset chapter state untuk lagu baru
     _chapters = [];
@@ -549,6 +618,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     }
 
     // 2. Alur: resolveStreamUrl(videoId) → cek cache → just_audio.setUrl → play → recordPlay
+    AudioStreamResult? activeStream;
     try {
       File? cachedFile;
       if (_cacheService != null) {
@@ -561,6 +631,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       if (cachedFile != null) {
         debugPrint('Memutar dari cache lokal offline: ${cachedFile.path}');
         await _player.setFilePath(cachedFile.path, initialPosition: initPos);
+        await _player.play();
       } else {
         // Cek konektivitas terlebih dahulu (Fail-fast bila offline)
         bool isOffline = false;
@@ -583,6 +654,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
             'Cache miss. Me-resolve stream YouTube audio untuk videoId: ${song.videoId}');
 
         var stream = await _youTubeService.resolveStreamUrl(song.videoId);
+        activeStream = stream;
 
         YouTubeAudioSource createAudioSource(AudioStreamResult streamInfo) {
           return YouTubeAudioSource(
@@ -592,9 +664,18 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
             contentType: streamInfo.contentType,
             tag: song,
             videoId: song.videoId,
-            onReResolveUrl: () async {
+            clientName: streamInfo.clientName,
+            isOpus: streamInfo.isOpus,
+            onReResolveUrl: ({bool fallbackNonOpus = false}) async {
+              if (fallbackNonOpus) {
+                final nonOpus = await _youTubeService.resolveNonOpusStream(
+                  song.videoId,
+                  clientStartIndex: 0,
+                );
+                return (url: nonOpus.url, headers: nonOpus.headers);
+              }
               final reStream =
-                  await _youTubeService.resolveStreamUrl(song.videoId);
+                  await _youTubeService.resolveStreamUrl(song.videoId, clientStartIndex: 0);
               return (url: reStream.url, headers: reStream.headers);
             },
           );
@@ -602,29 +683,57 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
         var audioSource = createAudioSource(stream);
 
-        try {
-          await _player.setAudioSource(audioSource, initialPosition: initPos);
-        } catch (setSourceErr) {
-          if (_isSourceError(setSourceErr)) {
-            debugPrint(
-                '[AudioPlayerService] setAudioSource gagal (source error: $setSourceErr), retry dengan URL segar...');
-            try {
-              stream = await _youTubeService.resolveStreamUrl(
-                song.videoId,
-                clientStartIndex: 1,
-              );
-              audioSource = createAudioSource(stream);
-              await _player.setAudioSource(audioSource,
-                  initialPosition: initPos);
+        int loadAttempt = 0;
+        while (true) {
+          try {
+            await _player.setAudioSource(audioSource, initialPosition: initPos);
+            await _player.play();
+            break;
+          } catch (loadErr) {
+            loadAttempt++;
+            if (loadAttempt >= 2) {
               debugPrint(
-                  '[AudioPlayerService] setAudioSource retry berhasil dengan URL segar (${stream.clientName}).');
-            } catch (retryErr) {
-              debugPrint(
-                  '[AudioPlayerService] setAudioSource retry gagal: $retryErr');
+                  '[AudioPlayerService] setAudioSource/play gagal setelah attempt $loadAttempt: $loadErr');
               rethrow;
             }
-          } else {
-            rethrow;
+
+            if (_isSourceError(loadErr) || loadErr is AppException) {
+              if (stream.isOpus) {
+                debugPrint(
+                    '[AudioPlayerService] Stream Opus gagal ($loadErr), fallback 1x ke Non-Opus (AAC)...');
+                try {
+                  stream = await _youTubeService.resolveNonOpusStream(
+                    song.videoId,
+                    clientStartIndex: 0,
+                  );
+                  activeStream = stream;
+                  audioSource = createAudioSource(stream);
+                  continue;
+                } catch (fallbackErr) {
+                  debugPrint(
+                      '[AudioPlayerService] Fallback Non-Opus gagal: $fallbackErr');
+                  rethrow;
+                }
+              } else {
+                debugPrint(
+                    '[AudioPlayerService] Stream gagal ($loadErr), retry 1x dengan URL segar (clientStartIndex: 0)...');
+                try {
+                  stream = await _youTubeService.resolveStreamUrl(
+                    song.videoId,
+                    clientStartIndex: 0,
+                  );
+                  activeStream = stream;
+                  audioSource = createAudioSource(stream);
+                  continue;
+                } catch (retryErr) {
+                  debugPrint(
+                      '[AudioPlayerService] Retry stream gagal: $retryErr');
+                  rethrow;
+                }
+              }
+            } else {
+              rethrow;
+            }
           }
         }
 
@@ -672,7 +781,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
             'Berhasil memuat stream videoId: ${song.videoId} menggunakan klien: ${stream.clientName}');
       }
 
-      await _player.play();
+      _hasSuccessfulPlayThisSession = true;
       _consecutiveFailures = 0;
       _playbackError = null;
       await _recordPlay(song);
@@ -705,8 +814,28 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         }
       }
 
+      final chunkErr = YouTubeAudioSource.lastChunkError;
+      String stage = 'load';
+      String httpStatus = '-';
+      if (chunkErr != null) {
+        stage = (chunkErr.range.startsWith('0-') || chunkErr.range.startsWith('bytes=0-'))
+            ? 'chunk-pertama'
+            : 'tengah';
+        if (chunkErr.statusCode != null) {
+          httpStatus = '${chunkErr.statusCode}';
+        }
+      }
+      final cName = activeStream?.clientName ?? 'androidSdkless';
+      debugPrint(
+          '[AudioPlayerService] DIAGNOSIS videoId=${song.videoId} stage=$stage client=$cName http=$httpStatus');
+
       // 4. Klasifikasi error berdasarkan tipe
-      final classifiedError = classifyPlaybackError(e, songTitle: song.title);
+      final classifiedError = classifyPlaybackError(
+        e,
+        songTitle: song.title,
+        lastChunkError: chunkErr,
+        hasSuccessfulPlayThisSession: _hasSuccessfulPlayThisSession,
+      );
       _playbackError = classifiedError;
       _consecutiveFailures++;
       _emitState();
@@ -721,7 +850,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         throw AppException(classifiedError, e);
       }
 
-      // 6. Lanjut otomatis ke lagu berikut di antrean (panggil next() internal)
+      // 6. Lanjut otomatis ke lagu berikut di antrean (panggil next() internal dengan fromAutoSkip: true)
       final hasNext = _currentIndex < _queue.length - 1 ||
           (_repeatMode == RepeatMode.all && _queue.isNotEmpty) ||
           (_isAutoMix && _queue.isNotEmpty);
@@ -730,7 +859,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         debugPrint(
             '[AudioPlayerService] Auto-skip ke lagu berikutnya di antrean...');
         await Future.delayed(const Duration(milliseconds: 300));
-        await next();
+        await next(fromAutoSkip: true);
       } else {
         throw AppException(classifiedError, e);
       }
@@ -753,7 +882,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   }
 
   @override
-  Future<void> next() async {
+  Future<void> next({bool fromAutoSkip = false}) async {
     if (_queue.isEmpty) return;
     saveCurrentPosition();
 
@@ -763,8 +892,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       return;
     }
 
-    // Bila ada chapters dan belum di chapter terakhir, lompat ke chapter berikutnya
-    if (_chapters.isNotEmpty && _chapterIndex < _chapters.length - 1) {
+    // Bila ada chapters dan belum di chapter terakhir, lompat ke chapter berikutnya (hanya untuk next manual dari user)
+    if (!fromAutoSkip && _chapters.isNotEmpty && _chapterIndex < _chapters.length - 1) {
       final nextChapter = _chapters[_chapterIndex + 1];
       await seek(Duration(milliseconds: nextChapter.positionMs));
       _chapterIndex++;
@@ -839,6 +968,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   Future<void> seek(Duration position) async {
     try {
       await _player.seek(position);
+      clearPlaybackError();
       if (_chapters.isNotEmpty) {
         _chapterIndex = _findChapterIndex(position, _chapters);
         _emitState();
@@ -850,6 +980,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         try {
           final freshStream = await _youTubeService.resolveStreamUrl(
             _currentSong!.videoId,
+            clientStartIndex: 0,
           );
           final audioSource = YouTubeAudioSource(
             uri: freshStream.url,
@@ -858,21 +989,40 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
             contentType: freshStream.contentType,
             tag: _currentSong,
             videoId: _currentSong!.videoId,
-            onReResolveUrl: () async {
+            clientName: freshStream.clientName,
+            isOpus: freshStream.isOpus,
+            onReResolveUrl: ({bool fallbackNonOpus = false}) async {
+              if (fallbackNonOpus) {
+                final nonOpus = await _youTubeService.resolveNonOpusStream(
+                  _currentSong!.videoId,
+                  clientStartIndex: 0,
+                );
+                return (url: nonOpus.url, headers: nonOpus.headers);
+              }
               final reStream = await _youTubeService.resolveStreamUrl(
                 _currentSong!.videoId,
+                clientStartIndex: 0,
               );
               return (url: reStream.url, headers: reStream.headers);
             },
           );
           await _player.setAudioSource(audioSource, initialPosition: position);
           await _player.play();
+          clearPlaybackError();
           if (_chapters.isNotEmpty) {
             _chapterIndex = _findChapterIndex(position, _chapters);
             _emitState();
           }
-        } catch (_) {
-          throw AppException('Gagal mempercepat lagu: $e', e);
+        } catch (recoverErr) {
+          final classified = classifyPlaybackError(
+            recoverErr,
+            songTitle: _currentSong?.title,
+            lastChunkError: YouTubeAudioSource.lastChunkError,
+            hasSuccessfulPlayThisSession: _hasSuccessfulPlayThisSession,
+          );
+          _playbackError = classified;
+          _emitState();
+          throw AppException('Gagal mempercepat lagu: $classified', recoverErr);
         }
       } else {
         throw AppException('Gagal mempercepat lagu: $e', e);

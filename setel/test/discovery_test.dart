@@ -26,6 +26,11 @@ class DummyYouTubeService implements YouTubeService {
       AudioStreamResult(
           url: Uri.parse('https://example.com/audio.m4a'), headers: {});
   @override
+  Future<AudioStreamResult> resolveNonOpusStream(String videoId,
+          {int clientStartIndex = 0}) async =>
+      AudioStreamResult(
+          url: Uri.parse('https://example.com/audio.m4a'), headers: {});
+  @override
   Future<List<String>> getSuggestions(String query) async => [];
   @override
   Future<List<SongChapter>> getChapters(String videoId) async => [];
@@ -50,7 +55,7 @@ class DummyAudioPlayerService implements AudioPlayerService {
   Future<void> addToQueueNext(Song song) async {}
 
   @override
-  Future<void> next() async {}
+  Future<void> next({bool fromAutoSkip = false}) async {}
 
   @override
   Future<void> playQueue(List<Song> songs,

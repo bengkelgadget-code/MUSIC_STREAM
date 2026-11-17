@@ -34,6 +34,11 @@ class ThrottledYouTubeService implements YouTubeService {
       resolveFuture;
 
   @override
+  Future<AudioStreamResult> resolveNonOpusStream(String videoId,
+          {int clientStartIndex = 0}) =>
+      resolveFuture;
+
+  @override
   Future<List<String>> getSuggestions(String query) async => [];
 
   @override
@@ -81,7 +86,7 @@ class FailingAudioPlayerService implements AudioPlayerService {
   }
 
   @override
-  Future<void> next() async {
+  Future<void> next({bool fromAutoSkip = false}) async {
     throw AppException('Gagal memutar lagu: TimeoutException');
   }
 

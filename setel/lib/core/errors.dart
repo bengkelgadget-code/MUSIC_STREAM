@@ -15,8 +15,34 @@ class AppException implements Exception {
   String toString() => message;
 }
 
+class ChunkErrorInfo {
+  final String? videoId;
+  final int? statusCode;
+  final String range;
+  final String? clientName;
+  final DateTime at;
+
+  ChunkErrorInfo({
+    this.videoId,
+    this.statusCode,
+    required this.range,
+    this.clientName,
+    DateTime? at,
+  }) : at = at ?? DateTime.now();
+
+  @override
+  String toString() =>
+      'ChunkErrorInfo(videoId: $videoId, status: $statusCode, range: $range, client: $clientName, at: $at)';
+}
+
 /// Klasifikasi penyebab error pemutaran audio berdasarkan tipe error asli (root cause).
-String classifyPlaybackError(Object error, {String? songTitle}) {
+String classifyPlaybackError(
+  Object error, {
+  String? songTitle,
+  int? httpStatusCode,
+  ChunkErrorInfo? lastChunkError,
+  bool hasSuccessfulPlayThisSession = false,
+}) {
   Object root = error;
   final clientErrors = <String>[];
 
@@ -31,8 +57,15 @@ String classifyPlaybackError(Object error, {String? songTitle}) {
     }
   }
 
+  final effectiveStatus = httpStatusCode ?? lastChunkError?.statusCode;
+
   final allErrorsCombined =
-      '$error $root ${clientErrors.join(' ')}'.toLowerCase();
+      '$error $root ${clientErrors.join(' ')} ${lastChunkError?.toString() ?? ''}'
+          .toLowerCase();
+
+  final title = (songTitle != null && songTitle.trim().isNotEmpty)
+      ? songTitle.trim()
+      : 'Lagu ini';
 
   // a. TIDAK ADA INTERNET
   if (root is SocketException ||
@@ -45,6 +78,17 @@ String classifyPlaybackError(Object error, {String? songTitle}) {
       allErrorsCombined.contains('timeoutexception') ||
       allErrorsCombined.contains('waktu koneksi habis')) {
     return 'Tidak ada koneksi internet. Periksa WiFi/data seluler, lalu coba lagi.';
+  }
+
+  // 404 / 410 (Stream audio tidak ditemukan / video dihapus)
+  if (effectiveStatus == 404 ||
+      effectiveStatus == 410 ||
+      allErrorsCombined.contains('status: 404') ||
+      allErrorsCombined.contains('status 404') ||
+      allErrorsCombined.contains('status: 410') ||
+      allErrorsCombined.contains('status 410') ||
+      allErrorsCombined.contains('404 not found')) {
+    return '"$title" tidak dapat diputar (stream audio video ini tidak ditemukan).';
   }
 
   // b. VIDEO TIDAK DAPAT DIPUTAR
@@ -60,14 +104,12 @@ String classifyPlaybackError(Object error, {String? songTitle}) {
       allErrorsCombined.contains('region') ||
       allErrorsCombined.contains('copyright') ||
       allErrorsCombined.contains('members-only')) {
-    final title = (songTitle != null && songTitle.trim().isNotEmpty)
-        ? songTitle.trim()
-        : 'Lagu ini';
     return '"$title" tidak dapat diputar (video dihapus/dibatasi/diblokir wilayah).';
   }
 
-  // c. PROTEKSI BOT
-  if (allErrorsCombined.contains('403') ||
+  // c. PROTEKSI BOT (HTTP 403 / Forbidden / bot check)
+  if (effectiveStatus == 403 ||
+      allErrorsCombined.contains('403') ||
       allErrorsCombined.contains('forbidden') ||
       allErrorsCombined.contains('sign in to confirm') ||
       allErrorsCombined.contains('not a bot') ||
@@ -81,8 +123,15 @@ String classifyPlaybackError(Object error, {String? songTitle}) {
   // SOURCE ERROR (ExoPlayer TYPE_SOURCE / stream load failure / googlevideo kedaluwarsa)
   if ((root is PlatformException && root.code == '0') ||
       (error is PlatformException && error.code == '0') ||
-      allErrorsCombined.contains('source error')) {
-    return 'Gagal memuat audio: sumber stream ditolak atau kedaluwarsa. Coba putar lagi atau ganti jaringan.';
+      allErrorsCombined.contains('source error') ||
+      allErrorsCombined.contains('streamchunkexception')) {
+    String msg =
+        'Gagal memuat audio: sumber stream ditolak atau kedaluwarsa. Coba putar lagi atau ganti jaringan.';
+    if (hasSuccessfulPlayThisSession) {
+      msg +=
+          ' Lagu lain di sesi ini berhasil diputar — kemungkinan videonya yang bermasalah, coba lagu lain.';
+    }
+    return msg;
   }
 
   // d. LAINNYA

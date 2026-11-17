@@ -141,7 +141,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   int _cacheSizeBytes = 0;
   bool _isLoadingCache = true;
-  String _appVersion = '1.3.11+29';
+  String _appVersion = '1.3.12+30';
 
   @override
   void initState() {

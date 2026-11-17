@@ -27,6 +27,14 @@ class DummyYouTubeService implements YouTubeService {
       );
 
   @override
+  Future<AudioStreamResult> resolveNonOpusStream(String videoId,
+          {int clientStartIndex = 0}) async =>
+      AudioStreamResult(
+        url: Uri.parse('https://example.com/audio.m4a'),
+        headers: {'User-Agent': 'test'},
+      );
+
+  @override
   Future<List<String>> getSuggestions(String query) async => [];
 
   @override

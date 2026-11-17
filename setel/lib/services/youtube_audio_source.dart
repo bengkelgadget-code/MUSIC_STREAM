@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
+import '../core/errors.dart';
+
 class StreamChunkException implements Exception {
   final String? videoId;
   final String range;
@@ -30,12 +32,18 @@ class StreamChunkException implements Exception {
 /// meminta range ke localhost, dan kelas ini mengambil byte audio dari YouTube CDN
 /// dalam chunk aman (512KB) dengan User-Agent yang sesuai serta retry otomatis bila ada gangguan jaringan.
 class YouTubeAudioSource extends StreamAudioSource {
+  static ChunkErrorInfo? lastChunkError;
+  static void resetLastChunkError() => lastChunkError = null;
+
   Uri uri;
   Map<String, String> headers;
   final int totalBytes;
   final String contentType;
   final String? videoId;
-  final Future<({Uri url, Map<String, String> headers})> Function()? onReResolveUrl;
+  final String? clientName;
+  final bool isOpus;
+  final Future<({Uri url, Map<String, String> headers})> Function(
+      {bool fallbackNonOpus})? onReResolveUrl;
   final HttpClient? httpClient;
 
   YouTubeAudioSource({
@@ -44,6 +52,8 @@ class YouTubeAudioSource extends StreamAudioSource {
     required this.totalBytes,
     required this.contentType,
     this.videoId,
+    this.clientName,
+    this.isOpus = false,
     this.onReResolveUrl,
     this.httpClient,
     super.tag,
@@ -64,6 +74,7 @@ class YouTubeAudioSource extends StreamAudioSource {
       const chunkSize = 512 * 1024; // 512 KB chunk aman & responsif
       var current = startByte;
       bool hasReResolved416 = false;
+      bool hasReResolvedFirstChunk = false;
 
       try {
         while (requestedEnd == null || current < requestedEnd) {
@@ -122,18 +133,53 @@ class YouTubeAudioSource extends StreamAudioSource {
               if (resp.statusCode != 206 && resp.statusCode != 200) {
                 debugPrint(
                     '[YouTubeAudioSource] Chunk $current-$to gagal (status: ${resp.statusCode}, retry: ${retryCount + 1}/3, videoId: $videoId)');
+
+                // 1B-b & 1H-b: Self-healing di dalam proxy bila chunk PERTAMA 403 atau 404
+                if (current == startByte &&
+                    (resp.statusCode == 403 || resp.statusCode == 404) &&
+                    onReResolveUrl != null &&
+                    !hasReResolvedFirstChunk) {
+                  hasReResolvedFirstChunk = true;
+                  debugPrint(
+                      '[YouTubeAudioSource] Chunk pertama $current-$to gagal status ${resp.statusCode} (videoId: $videoId). Mencoba self-healing re-resolve 1x (fallbackNonOpus: $isOpus)...');
+                  try {
+                    final fresh =
+                        await onReResolveUrl!(fallbackNonOpus: isOpus);
+                    uri = fresh.url;
+                    headers = fresh.headers;
+                    continue; // Coba chunk pertama lagi dengan URL baru
+                  } catch (reErr) {
+                    debugPrint(
+                        '[YouTubeAudioSource] Self-healing re-resolve gagal: $reErr');
+                  }
+                }
+
                 retryCount++;
                 if (retryCount < 3) {
                   await Future.delayed(const Duration(milliseconds: 250));
                   continue;
                 }
+
+                // Catat ke diagnostic holder jika chunk pertama gagal
+                if (current == startByte) {
+                  lastChunkError = ChunkErrorInfo(
+                    videoId: videoId,
+                    statusCode: resp.statusCode,
+                    range: '$current-$to',
+                    clientName: clientName,
+                  );
+                  debugPrint(
+                      '[YouTubeAudioSource] Chunk pertama gagal dicatat: $lastChunkError');
+                }
+
                 debugPrint(
                     '[YouTubeAudioSource] Stream berakhir prematur / gagal setelah 3x retry pada range $current-$to (status: ${resp.statusCode}, videoId: $videoId)');
                 throw StreamChunkException(
                   videoId: videoId,
                   range: '$current-$to',
                   statusCode: resp.statusCode,
-                  message: 'Gagal streaming chunk setelah 3 percobaan (status: ${resp.statusCode})',
+                  message:
+                      'Gagal streaming chunk setelah 3 percobaan (status: ${resp.statusCode})',
                 );
               }
 
@@ -189,13 +235,22 @@ class YouTubeAudioSource extends StreamAudioSource {
                   await Future.delayed(const Duration(milliseconds: 250));
                   continue;
                 }
+                if (current == startByte) {
+                  lastChunkError = ChunkErrorInfo(
+                    videoId: videoId,
+                    statusCode: resp.statusCode,
+                    range: '$current-$to',
+                    clientName: clientName,
+                  );
+                }
                 debugPrint(
                     '[YouTubeAudioSource] Stream berakhir prematur / gagal: body pendek setelah 3x retry pada range $current-$to (videoId: $videoId)');
                 throw StreamChunkException(
                   videoId: videoId,
                   range: '$current-$to',
                   statusCode: resp.statusCode,
-                  message: 'Body lebih pendek dari yang diminta (${chunkBuffer.length}/$expectedBytes bytes) setelah 3x retry',
+                  message:
+                      'Body lebih pendek dari yang diminta (${chunkBuffer.length}/$expectedBytes bytes) setelah 3x retry',
                 );
               }
 
@@ -209,6 +264,14 @@ class YouTubeAudioSource extends StreamAudioSource {
                   '[YouTubeAudioSource] Exception saat fetch chunk $current-$to: $e (retry: ${retryCount + 1}/3, videoId: $videoId)');
               retryCount++;
               if (retryCount >= 3) {
+                if (current == startByte) {
+                  lastChunkError = ChunkErrorInfo(
+                    videoId: videoId,
+                    statusCode: null,
+                    range: '$current-$to',
+                    clientName: clientName,
+                  );
+                }
                 debugPrint(
                     '[YouTubeAudioSource] Stream berakhir prematur / gagal setelah 3x retry pada range $current-$to (error: $e, videoId: $videoId)');
                 throw StreamChunkException(

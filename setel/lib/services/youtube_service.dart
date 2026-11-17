@@ -188,6 +188,8 @@ class AudioStreamResult {
   final String clientName;
   final int totalBytes;
   final String contentType;
+  final int tag;
+  final String codec;
 
   const AudioStreamResult({
     required this.url,
@@ -195,11 +197,16 @@ class AudioStreamResult {
     this.clientName = '',
     this.totalBytes = 0,
     this.contentType = 'audio/mp4',
+    this.tag = 0,
+    this.codec = '',
   });
+
+  bool get isOpus =>
+      contentType == 'audio/webm' || codec.toLowerCase().contains('opus');
 
   @override
   String toString() =>
-      'AudioStreamResult(client: $clientName, url: $url, totalBytes: $totalBytes, contentType: $contentType, headers: $headers)';
+      'AudioStreamResult(client: $clientName, url: $url, totalBytes: $totalBytes, contentType: $contentType, tag: $tag, codec: $codec, headers: $headers)';
 
   @override
   bool operator ==(Object other) =>
@@ -222,6 +229,12 @@ abstract class YouTubeService {
   /// Mengambil manifest dari SATU klien per percobaan, urutan tangga:
   /// (a) YoutubeApiClient.androidSdkless, (b) androidVr, (c) android, (d) ios, (e) tv.
   Future<AudioStreamResult> resolveStreamUrl(
+    String videoId, {
+    int clientStartIndex = 0,
+  });
+
+  /// Resolve stream audio non-Opus (terutama AAC itag 140) sebagai fallback saat stream Opus gagal dimuat.
+  Future<AudioStreamResult> resolveNonOpusStream(
     String videoId, {
     int clientStartIndex = 0,
   });
@@ -613,6 +626,8 @@ class YouTubeServiceImpl implements YouTubeService {
             clientName: candidate.name,
             totalBytes: audioStream.size.totalBytes,
             contentType: contentType,
+            tag: audioStream.tag,
+            codec: audioStream.audioCodec,
           );
         }
 
@@ -629,6 +644,8 @@ class YouTubeServiceImpl implements YouTubeService {
             clientName: candidate.name,
             totalBytes: muxedStream.size.totalBytes,
             contentType: 'audio/mp4',
+            tag: muxedStream.tag,
+            codec: muxedStream.audioCodec,
           );
         }
 
@@ -697,6 +714,99 @@ class YouTubeServiceImpl implements YouTubeService {
 
     throw AppException(
       'Gagal memuat stream audio untuk video $videoId: $lastError',
+      lastError,
+      clientErrors,
+    );
+  }
+
+  @override
+  Future<AudioStreamResult> resolveNonOpusStream(
+    String videoId, {
+    int clientStartIndex = 0,
+  }) async {
+    final startIndex =
+        (clientStartIndex >= 0 && clientStartIndex < streamClients.length)
+            ? clientStartIndex
+            : 0;
+
+    final candidateClients = [
+      ...streamClients.sublist(startIndex),
+      ...streamClients.sublist(0, startIndex),
+    ];
+
+    Object? lastError;
+    final List<String> clientErrors = [];
+
+    for (final candidate in candidateClients) {
+      final yt = YoutubeExplode();
+      try {
+        debugPrint(
+            'Mencoba resolve non-Opus stream videoId: $videoId dengan klien: ${candidate.name}');
+        final manifest = await yt.videos.streamsClient
+            .getManifest(
+              videoId,
+              requireWatchPage: false,
+              ytClients: [candidate.client],
+            )
+            .timeout(const Duration(seconds: 15));
+
+        final audioStreams = manifest.audioOnly;
+        final nonOpus = audioStreams.where((s) => !_isOpusStream(s)).toList();
+        if (nonOpus.isNotEmpty) {
+          // Utamakan itag 140 (AAC 128kbps) bila ada, atau sort descending bitrate
+          nonOpus.sort((a, b) {
+            if (a.tag == 140) return -1;
+            if (b.tag == 140) return 1;
+            return b.bitrate.compareTo(a.bitrate);
+          });
+          final selected = nonOpus.first;
+          final contentType =
+              selected.container.name == 'webm' ? 'audio/webm' : 'audio/mp4';
+          debugPrint(
+              'Berhasil me-resolve non-Opus audio untuk videoId: $videoId '
+              'menggunakan ${candidate.name} (container: ${selected.container.name}, codec: ${selected.audioCodec}, tag: ${selected.tag}, ${selected.bitrate.kiloBitsPerSecond} kbps, ${selected.size.totalBytes} bytes)');
+          return AudioStreamResult(
+            url: selected.url,
+            headers: {'User-Agent': candidate.userAgent},
+            clientName: candidate.name,
+            totalBytes: selected.size.totalBytes,
+            contentType: contentType,
+            tag: selected.tag,
+            codec: selected.audioCodec,
+          );
+        }
+
+        if (manifest.muxed.isNotEmpty) {
+          final muxedList = manifest.muxed.toList();
+          muxedList.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+          final selected = muxedList.first;
+          debugPrint(
+              'Berhasil me-resolve muxed non-Opus (fallback) untuk videoId: $videoId '
+              'menggunakan ${candidate.name} (tag: ${selected.tag}, ${selected.bitrate.kiloBitsPerSecond} kbps)');
+          return AudioStreamResult(
+            url: selected.url,
+            headers: {'User-Agent': candidate.userAgent},
+            clientName: candidate.name,
+            totalBytes: selected.size.totalBytes,
+            contentType: 'audio/mp4',
+            tag: selected.tag,
+            codec: selected.audioCodec,
+          );
+        }
+
+        clientErrors.add('${candidate.name}: Tidak ada stream non-Opus');
+      } catch (e) {
+        debugPrint(
+            'Klien ${candidate.name} gagal me-resolve non-Opus video $videoId: $e');
+        clientErrors.add('${candidate.name}: $e');
+        lastError = e;
+      } finally {
+        yt.close();
+      }
+    }
+
+    throw AppException(
+      'Gagal me-resolve stream non-Opus untuk video $videoId: ${clientErrors.join(', ')}',
       lastError,
       clientErrors,
     );
