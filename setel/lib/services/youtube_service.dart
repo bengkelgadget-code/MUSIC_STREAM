@@ -583,17 +583,20 @@ class YouTubeServiceImpl implements YouTubeService {
             'Tertinggi';
 
     Object? lastError;
+    final List<String> clientErrors = [];
 
     for (final candidate in candidateClients) {
       final yt = YoutubeExplode();
       try {
         debugPrint(
             'Mencoba resolve stream videoId: $videoId dengan klien: ${candidate.name} (format: $streamFormat)');
-        final manifest = await yt.videos.streamsClient.getManifest(
-          videoId,
-          requireWatchPage: false,
-          ytClients: [candidate.client],
-        );
+        final manifest = await yt.videos.streamsClient
+            .getManifest(
+              videoId,
+              requireWatchPage: false,
+              ytClients: [candidate.client],
+            )
+            .timeout(const Duration(seconds: 15));
         // Prioritaskan stream audio-only (terutama Opus webm) sesuai format yang dipilih.
         // Stream audio-only murni menghemat data 70-90% dibanding stream muxed yang menyertakan track video.
         final audioStreams = manifest.audioOnly;
@@ -628,9 +631,12 @@ class YouTubeServiceImpl implements YouTubeService {
             contentType: 'audio/mp4',
           );
         }
+
+        clientErrors.add('${candidate.name}: Manifest kosong (tidak ada audioOnly maupun muxed)');
       } catch (e) {
         debugPrint(
             'Klien ${candidate.name} gagal me-resolve video $videoId: $e');
+        clientErrors.add('${candidate.name}: $e');
         lastError = e;
       } finally {
         yt.close();
@@ -642,11 +648,13 @@ class YouTubeServiceImpl implements YouTubeService {
     // agar lagu tetap BUNYI dan tidak crash bagi user.
     final ytFallback = YoutubeExplode();
     try {
-      final manifest = await ytFallback.videos.streamsClient.getManifest(
-        videoId,
-        requireWatchPage: false,
-        ytClients: [YoutubeApiClient.androidSdkless],
-      );
+      final manifest = await ytFallback.videos.streamsClient
+          .getManifest(
+            videoId,
+            requireWatchPage: false,
+            ytClients: [YoutubeApiClient.androidSdkless],
+          )
+          .timeout(const Duration(seconds: 15));
       if (manifest.muxed.isNotEmpty) {
         final muxed = selectMuxedStreamByFormat(manifest.muxed, streamFormat);
         debugPrint(
@@ -676,14 +684,21 @@ class YouTubeServiceImpl implements YouTubeService {
               audio.container.name == 'webm' ? 'audio/webm' : 'audio/mp4',
         );
       }
-    } catch (_) {
+      clientErrors.add('androidSdkless-fallback: Manifest kosong');
+    } catch (e) {
+      clientErrors.add('androidSdkless-fallback: $e');
+      lastError ??= e;
     } finally {
       ytFallback.close();
     }
 
+    debugPrint(
+        '[YouTubeService] Semua klien gagal resolve videoId $videoId:\n${clientErrors.join('\n')}');
+
     throw AppException(
       'Gagal memuat stream audio untuk video $videoId: $lastError',
       lastError,
+      clientErrors,
     );
   }
 

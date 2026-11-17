@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/errors.dart';
 import '../models/song.dart';
 import '../models/song_chapter.dart';
 import '../services/audio_player_service.dart';
@@ -138,24 +139,7 @@ class PlayerController extends Notifier<PlayerControllerState> {
   }
 
   String _formatErrorMessage(Object error) {
-    final str = error.toString();
-    if (str.contains('403') ||
-        str.contains('Forbidden') ||
-        str.contains('server menolak akses stream')) {
-      return 'Gagal memutar lagu: server menolak akses stream (kemungkinan proteksi bot di jaringan ini).';
-    } else if (str.contains('SocketException') ||
-        str.contains('Failed host lookup') ||
-        str.contains('ClientException')) {
-      return 'Gagal memutar lagu: Periksa koneksi internet Anda.';
-    } else if (str.contains('RequestLimitExceededException') ||
-        str.contains('rate limiting')) {
-      return 'Gagal memutar lagu: Batas permintaan YouTube tercapai. Coba beberapa saat lagi.';
-    } else if (str.contains('TimeoutException')) {
-      return 'Gagal memutar lagu: Waktu koneksi habis.';
-    } else if (str.contains('bot') || str.contains('Sign in to confirm')) {
-      return 'Gagal memutar lagu: server menolak akses stream (kemungkinan proteksi bot di jaringan ini).';
-    }
-    return 'Gagal memutar lagu: tidak dapat mengambil data stream.';
+    return classifyPlaybackError(error, songTitle: state.currentSong?.title);
   }
 
   Future<void> playSong(Song song,

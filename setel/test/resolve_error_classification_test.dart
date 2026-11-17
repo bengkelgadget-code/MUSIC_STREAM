@@ -1,0 +1,336 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:setel/core/errors.dart';
+import 'package:setel/models/song.dart';
+import 'package:setel/models/song_chapter.dart';
+import 'package:setel/services/audio_handler.dart';
+import 'package:setel/services/audio_player_service.dart';
+import 'package:setel/services/youtube_service.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+
+class FakeConnectivity implements Connectivity {
+  final List<ConnectivityResult> results;
+  FakeConnectivity(this.results);
+
+  @override
+  Future<List<ConnectivityResult>> checkConnectivity() async => results;
+
+  @override
+  Stream<List<ConnectivityResult>> get onConnectivityChanged =>
+      Stream.value(results);
+}
+
+class TrackingYouTubeService implements YouTubeService {
+  int resolveCallCount = 0;
+  final Future<AudioStreamResult> Function(String videoId)? onResolve;
+
+  TrackingYouTubeService({this.onResolve});
+
+  @override
+  Future<AudioStreamResult> resolveStreamUrl(String videoId,
+      {int clientStartIndex = 0}) async {
+    resolveCallCount++;
+    if (onResolve != null) {
+      return onResolve!(videoId);
+    }
+    throw AppException(
+      'Gagal memuat stream audio untuk video $videoId: 403 Forbidden',
+      const HttpException('403 Forbidden'),
+      ['androidSdkless: 403 Forbidden', 'ios: 403 Forbidden'],
+    );
+  }
+
+  @override
+  Future<List<Song>> search(String query, {int limit = 25}) async => [];
+  @override
+  Future<List<String>> getSuggestions(String query) async => [];
+  @override
+  Future<List<SongChapter>> getChapters(String videoId) async => [];
+  @override
+  Future<List<Song>> getRelatedSongs(String videoId, {int limit = 20}) async => [];
+  @override
+  Future<Song> fetchMetadata(String videoId) async => const Song(
+        videoId: 'v1',
+        title: 'Title',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+}
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  group('Poin 2: Klasifikasi Penyebab Error Pemutaran Berdasarkan Tipe', () {
+    test('Kategori (a) TIDAK ADA INTERNET dipetakan dengan benar', () {
+      // 1. SocketException langsung
+      final msg1 = classifyPlaybackError(
+        const SocketException('Failed host lookup: "rr1---sn.googlevideo.com"'),
+      );
+      expect(
+        msg1,
+        'Tidak ada koneksi internet. Periksa WiFi/data seluler, lalu coba lagi.',
+      );
+
+      // 2. TimeoutException
+      final msg2 = classifyPlaybackError(
+        TimeoutException('Connection timed out after 15s'),
+      );
+      expect(
+        msg2,
+        'Tidak ada koneksi internet. Periksa WiFi/data seluler, lalu coba lagi.',
+      );
+
+      // 3. AppException membungkus SocketException
+      final msg3 = classifyPlaybackError(
+        AppException(
+          'Network failure',
+          const SocketException('Network is unreachable'),
+        ),
+      );
+      expect(
+        msg3,
+        'Tidak ada koneksi internet. Periksa WiFi/data seluler, lalu coba lagi.',
+      );
+    });
+
+    test('Kategori (b) VIDEO TIDAK DAPAT DIPUTAR dipetakan dengan benar', () {
+      // 1. VideoUnplayableException
+      final msg1 = classifyPlaybackError(
+        VideoUnplayableException('This video is not available in your region'),
+        songTitle: 'Lagu Daerah',
+      );
+      expect(
+        msg1,
+        '"Lagu Daerah" tidak dapat diputar (video dihapus/dibatasi/diblokir wilayah).',
+      );
+
+      // 2. Pesan mengandung unplayable / private / removed
+      final msg2 = classifyPlaybackError(
+        Exception('Video is private or removed by uploader'),
+        songTitle: 'Lagu Langka',
+      );
+      expect(
+        msg2,
+        '"Lagu Langka" tidak dapat diputar (video dihapus/dibatasi/diblokir wilayah).',
+      );
+
+      // 3. Fallback judul lagu jika null
+      final msg3 = classifyPlaybackError(
+        VideoUnavailableException('Video unavailable'),
+      );
+      expect(
+        msg3,
+        '"Lagu ini" tidak dapat diputar (video dihapus/dibatasi/diblokir wilayah).',
+      );
+    });
+
+    test('Kategori (c) PROTEKSI BOT dipetakan dengan benar', () {
+      // 1. Status 403 Forbidden
+      final msg1 = classifyPlaybackError(
+        AppException(
+          'Gagal memuat stream: 403 Forbidden',
+          const HttpException('403 Forbidden'),
+        ),
+      );
+      expect(
+        msg1,
+        'Server menolak akses stream (kemungkinan proteksi bot di jaringan ini). Coba ganti jaringan (WiFi lain / data seluler).',
+      );
+
+      // 2. Pesan Sign in to confirm you\'re not a bot
+      final msg2 = classifyPlaybackError(
+        Exception("Sign in to confirm you're not a bot"),
+      );
+      expect(
+        msg2,
+        'Server menolak akses stream (kemungkinan proteksi bot di jaringan ini). Coba ganti jaringan (WiFi lain / data seluler).',
+      );
+
+      // 3. Client errors berisi manifest kosong
+      final msg3 = classifyPlaybackError(
+        AppException(
+          'Gagal',
+          null,
+          ['androidSdkless: Manifest kosong', 'ios: Manifest kosong'],
+        ),
+      );
+      expect(
+        msg3,
+        'Server menolak akses stream (kemungkinan proteksi bot di jaringan ini). Coba ganti jaringan (WiFi lain / data seluler).',
+      );
+    });
+
+    test('Kategori (d) LAINNYA menampilkan ringkasan error asli tanpa pesan generik', () {
+      final msg1 = classifyPlaybackError(
+        Exception('Media codec initialization failed during hardware decoding'),
+      );
+      expect(
+        msg1,
+        'Gagal memutar lagu: Media codec initialization failed during hardware decoding.',
+      );
+      expect(msg1, isNot(contains('tidak dapat mengambil data stream')));
+
+      // Truncation bila pesan melebihi 120 karakter
+      final longMsg = 'A' * 200;
+      final msg2 = classifyPlaybackError(Exception(longMsg));
+      expect(msg2.length, lessThanOrEqualTo(140)); // prefix + 120 chars
+      expect(msg2, endsWith('...'));
+    });
+  });
+
+  group('Poin 1 & 3: Resolve Efisien (1x Panggil) & Fail-Fast Offline', () {
+    test('SEBELUM resolve: Fail-fast saat offline tanpa memanggil resolveStreamUrl sama sekali', () async {
+      final trackingYt = TrackingYouTubeService();
+      final offlineConn = FakeConnectivity([ConnectivityResult.none]);
+      final handler = SetelAudioHandler();
+
+      final player = AudioPlayerServiceImpl(
+        youTubeService: trackingYt,
+        audioHandler: handler,
+        connectivity: offlineConn,
+      );
+
+      const song = Song(
+        videoId: 'vid_offline_1',
+        title: 'Offline Test Song',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+
+      try {
+        await player.playSong(song);
+      } catch (_) {}
+
+      // resolveStreamUrl TIDAK PERNAH dipanggil karena fail-fast langsung di awal
+      expect(trackingYt.resolveCallCount, 0);
+
+      // State harus langsung memancarkan error kategori (a)
+      final state = await player.playerState.first;
+      expect(
+        state.playbackError,
+        'Tidak ada koneksi internet. Periksa WiFi/data seluler, lalu coba lagi.',
+      );
+    });
+
+    test('Hapus loop ganda: resolveStreamUrl hanya dipanggil 1x saat pemutaran gagal total', () async {
+      final trackingYt = TrackingYouTubeService();
+      final onlineConn = FakeConnectivity([ConnectivityResult.wifi]);
+      final handler = SetelAudioHandler();
+
+      final player = AudioPlayerServiceImpl(
+        youTubeService: trackingYt,
+        audioHandler: handler,
+        connectivity: onlineConn,
+      );
+
+      const song = Song(
+        videoId: 'vid_single_call',
+        title: 'Single Call Song',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+
+      try {
+        await player.playSong(song);
+      } catch (_) {}
+
+      // Tepat 1x pemanggilan (tidak ada loop 5x dari luar)
+      expect(trackingYt.resolveCallCount, 1);
+    });
+  });
+
+  group('Poin 4: Auto-Skip dan Batas 3x Gagal Beruntun', () {
+    test('Lagu gagal total auto-skip ke lagu berikutnya dalam antrean', () async {
+      int resolveAttempt = 0;
+      final trackingYt = TrackingYouTubeService(
+        onResolve: (videoId) async {
+          resolveAttempt++;
+          if (videoId == 'bad_vid_1') {
+            throw VideoUnplayableException('Video unavailable');
+          }
+          // Lagu kedua juga dicoba dan melempar error unplayable
+          throw VideoUnplayableException('Video 2 unavailable');
+        },
+      );
+
+      final onlineConn = FakeConnectivity([ConnectivityResult.wifi]);
+      final handler = SetelAudioHandler();
+
+      final player = AudioPlayerServiceImpl(
+        youTubeService: trackingYt,
+        audioHandler: handler,
+        connectivity: onlineConn,
+      );
+
+      const songs = [
+        Song(
+          videoId: 'bad_vid_1',
+          title: 'Rusak 1',
+          artist: 'Artist',
+          durationMs: 180000,
+          thumbnailUrl: '',
+        ),
+        Song(
+          videoId: 'good_vid_2',
+          title: 'Bagus 2',
+          artist: 'Artist',
+          durationMs: 180000,
+          thumbnailUrl: '',
+        ),
+      ];
+
+      try {
+        await player.playQueue(songs, startIndex: 0);
+      } catch (_) {}
+
+      // Beri jeda auto-skip
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Harus sudah mencoba lagu 1 lalu auto-skip ke lagu 2
+      expect(resolveAttempt, greaterThanOrEqualTo(2));
+      expect(trackingYt.resolveCallCount, greaterThanOrEqualTo(2));
+    });
+
+    test('3 lagu beruntun gagal -> BERHENTI dan tidak melanjutkan loop', () async {
+      int calls = 0;
+      final trackingYt = TrackingYouTubeService(
+        onResolve: (videoId) async {
+          calls++;
+          throw VideoUnplayableException('Video removed');
+        },
+      );
+
+      final onlineConn = FakeConnectivity([ConnectivityResult.wifi]);
+      final handler = SetelAudioHandler();
+
+      final player = AudioPlayerServiceImpl(
+        youTubeService: trackingYt,
+        audioHandler: handler,
+        connectivity: onlineConn,
+      );
+
+      const queue = [
+        Song(videoId: 'fail_1', title: 'F1', artist: 'A', durationMs: 1000, thumbnailUrl: ''),
+        Song(videoId: 'fail_2', title: 'F2', artist: 'A', durationMs: 1000, thumbnailUrl: ''),
+        Song(videoId: 'fail_3', title: 'F3', artist: 'A', durationMs: 1000, thumbnailUrl: ''),
+        Song(videoId: 'fail_4', title: 'F4', artist: 'A', durationMs: 1000, thumbnailUrl: ''),
+      ];
+
+      try {
+        await player.playQueue(queue, startIndex: 0);
+      } catch (_) {}
+
+      // Tunggu jeda auto-skip antar trek
+      await Future.delayed(const Duration(milliseconds: 1200));
+
+      // Berhenti tepat setelah 3 lagu beruntun gagal (lagu 4 tidak diputar)
+      expect(calls, 3);
+    });
+  });
+}

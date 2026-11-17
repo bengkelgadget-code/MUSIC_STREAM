@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
@@ -109,6 +110,18 @@ class FailingAudioPlayerService implements AudioPlayerService {
   void clearPlaybackError() {}
 }
 
+class FakeConnectivity implements Connectivity {
+  final List<ConnectivityResult> results;
+  FakeConnectivity(this.results);
+
+  @override
+  Future<List<ConnectivityResult>> checkConnectivity() async => results;
+
+  @override
+  Stream<List<ConnectivityResult>> get onConnectivityChanged =>
+      Stream.value(results);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory tempDir;
@@ -172,7 +185,7 @@ void main() {
       expect(stateAfterPlay.playbackError, isNotNull);
       expect(
         stateAfterPlay.playbackError,
-        contains('server menolak akses stream (kemungkinan proteksi bot di jaringan ini)'),
+        contains('Server menolak akses stream (kemungkinan proteksi bot di jaringan ini)'),
       );
 
       // 2. clearPlaybackError membersihkan error
@@ -186,7 +199,7 @@ void main() {
       );
       expect(
         container.read(playerControllerProvider).playbackError,
-        contains('Periksa koneksi internet Anda'),
+        contains('Tidak ada koneksi internet'),
       );
 
       // 4. next menangkap timeout error
@@ -197,7 +210,7 @@ void main() {
       );
       expect(
         container.read(playerControllerProvider).playbackError,
-        contains('Waktu koneksi habis'),
+        contains('Tidak ada koneksi internet'),
       );
 
       // 5. previous menangkap generic error
@@ -208,7 +221,7 @@ void main() {
       );
       expect(
         container.read(playerControllerProvider).playbackError,
-        contains('tidak dapat mengambil data stream'),
+        contains('Generic playback failure'),
       );
 
       container.dispose();
@@ -287,11 +300,13 @@ void main() {
         () async {
       final handler = SetelAudioHandler();
       final completer = Completer<AudioStreamResult>();
+      completer.future.ignore();
 
       final throttledYt = ThrottledYouTubeService(completer.future);
       final playerService = AudioPlayerServiceImpl(
         youTubeService: throttledYt,
         audioHandler: handler,
+        connectivity: FakeConnectivity([ConnectivityResult.wifi]),
       );
 
       const song = Song(
@@ -312,6 +327,9 @@ void main() {
       expect(handler.playbackState.value.playing, isTrue);
       expect(handler.playbackState.value.processingState,
           AudioProcessingState.loading);
+
+      // Beri 1 tick event loop agar langkah pra-resolve (cek konektivitas) selesai
+      await Future<void>.delayed(Duration.zero);
 
       // Simulasi mode pesawat atau network gagal (misal airplane mode dinyalakan)
       completer.completeError(AppException('Network error / mode pesawat'));

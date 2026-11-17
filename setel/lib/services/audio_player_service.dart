@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 import 'package:just_audio/just_audio.dart';
@@ -128,6 +129,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   final SetelAudioHandler _audioHandler;
   final LibraryService? _libraryService;
   final CacheService? _cacheService;
+  final Connectivity _connectivity;
 
   final StreamController<PlayerState> _stateController =
       StreamController<PlayerState>.broadcast();
@@ -158,6 +160,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   String? _playbackError;
   bool _isRecoveringPlayback = false;
   int _recoveryAttempts = 0;
+  int _consecutiveFailures = 0;
 
   int _findChapterIndex(Duration pos, List<SongChapter> chapters) {
     if (chapters.isEmpty) return -1;
@@ -179,11 +182,13 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     required SetelAudioHandler audioHandler,
     LibraryService? libraryService,
     CacheService? cacheService,
+    Connectivity? connectivity,
   })  : _player = player ?? AudioPlayer(),
         _youTubeService = youTubeService,
         _audioHandler = audioHandler,
         _libraryService = libraryService,
-        _cacheService = cacheService {
+        _cacheService = cacheService,
+        _connectivity = connectivity ?? Connectivity() {
     _initListeners();
     _connectAudioHandler();
   }
@@ -303,7 +308,6 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       try {
         final freshStream = await _youTubeService.resolveStreamUrl(
           song.videoId,
-          clientStartIndex: 1,
         );
         final audioSource = YouTubeAudioSource(
           uri: freshStream.url,
@@ -315,7 +319,6 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           onReResolveUrl: () async {
             final reStream = await _youTubeService.resolveStreamUrl(
               song.videoId,
-              clientStartIndex: 1,
             );
             return (url: reStream.url, headers: reStream.headers);
           },
@@ -333,7 +336,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       }
     }
 
-    _playbackError = 'Pemutaran terputus: koneksi YouTube gagal dipulihkan.';
+    _playbackError = classifyPlaybackError(error, songTitle: song.title);
     _emitState();
   }
 
@@ -406,6 +409,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
   @override
   Future<void> playSong(Song song, {Duration? initialPosition, bool autoMix = false}) async {
+    _consecutiveFailures = 0;
     saveCurrentPosition();
     _pendingInitialPosition = initialPosition;
     _isAutoMix = autoMix;
@@ -450,6 +454,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   @override
   Future<void> playQueue(List<Song> songs, {int startIndex = 0, Duration? initialPosition}) async {
     if (songs.isEmpty) return;
+    _consecutiveFailures = 0;
     saveCurrentPosition();
     _pendingInitialPosition = initialPosition;
     _isAutoMix = false;
@@ -538,121 +543,90 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         debugPrint('Memutar dari cache lokal offline: ${cachedFile.path}');
         await _player.setFilePath(cachedFile.path, initialPosition: initPos);
       } else {
+        // Cek konektivitas terlebih dahulu (Fail-fast bila offline)
+        bool isOffline = false;
+        try {
+          final connectivityResult = await _connectivity.checkConnectivity();
+          isOffline = connectivityResult.isNotEmpty &&
+              connectivityResult.every((r) => r == ConnectivityResult.none);
+        } catch (connErr) {
+          debugPrint('[AudioPlayerService] checkConnectivity skipped: $connErr');
+        }
+        if (isOffline) {
+          debugPrint('[AudioPlayerService] Offline terdeteksi sebelum resolve stream.');
+          throw AppException(
+            'Tidak ada koneksi internet. Periksa WiFi/data seluler, lalu coba lagi.',
+            const SocketException('Tidak ada koneksi internet (ConnectivityResult.none)'),
+          );
+        }
+
         debugPrint(
             'Cache miss. Me-resolve stream YouTube audio untuk videoId: ${song.videoId}');
-        
-        final clients = YouTubeServiceImpl.streamClients;
-        final totalClients = clients.isNotEmpty ? clients.length : 1;
-        bool playSuccess = false;
-        Object? lastError;
-        String lastClientName = 'unknown';
-        bool allAre403 = true;
-        int errorCount = 0;
 
-        for (int attempt = 0; attempt < totalClients; attempt++) {
-          final candidate = clients.isNotEmpty ? clients[attempt] : null;
-          final candidateName = candidate?.name ?? 'klien_$attempt';
-          lastClientName = candidateName;
+        final stream = await _youTubeService.resolveStreamUrl(song.videoId);
 
-          try {
-            debugPrint(
-                'Mencoba putar stream videoId: ${song.videoId} dengan klien: $candidateName (percobaan ${attempt + 1}/$totalClients)...');
-            final stream = await _youTubeService.resolveStreamUrl(
-              song.videoId,
-              clientStartIndex: attempt,
-            );
-            lastClientName = stream.clientName;
+        final audioSource = YouTubeAudioSource(
+          uri: stream.url,
+          headers: stream.headers,
+          totalBytes: stream.totalBytes,
+          contentType: stream.contentType,
+          tag: song,
+          videoId: song.videoId,
+          onReResolveUrl: () async {
+            final reStream = await _youTubeService.resolveStreamUrl(song.videoId);
+            return (url: reStream.url, headers: reStream.headers);
+          },
+        );
 
-            final audioSource = YouTubeAudioSource(
-              uri: stream.url,
-              headers: stream.headers,
-              totalBytes: stream.totalBytes,
-              contentType: stream.contentType,
-              tag: song,
-              videoId: song.videoId,
-              onReResolveUrl: () async {
-                final reStream = await _youTubeService.resolveStreamUrl(
-                  song.videoId,
-                  clientStartIndex: 1,
-                );
-                return (url: reStream.url, headers: reStream.headers);
-              },
-            );
+        await _player.setAudioSource(audioSource, initialPosition: initPos);
 
-            await _player.setAudioSource(audioSource, initialPosition: initPos);
+        // Cek pengaturan auto_cache_enabled (default: false untuk menghemat kuota)
+        final settingsBox =
+            Hive.isBoxOpen(BOX_SETTINGS) ? Hive.box(BOX_SETTINGS) : null;
+        final autoCacheEnabled = (settingsBox?.get('auto_cache_enabled',
+                defaultValue: false) as bool?) ??
+            false;
 
-            // Cek pengaturan auto_cache_enabled (default: false untuk menghemat kuota)
-            final settingsBox =
-                Hive.isBoxOpen(BOX_SETTINGS) ? Hive.box(BOX_SETTINGS) : null;
-            final autoCacheEnabled = (settingsBox?.get('auto_cache_enabled',
-                    defaultValue: false) as bool?) ??
-                false;
-
-            // Batasi auto-cache: HANYA bila diaktifkan pengguna DAN durasi <= 15 menit
-            if (autoCacheEnabled && song.durationMs <= 15 * 60 * 1000) {
-              if (_cacheService != null) {
-                _currentlyCachingSong = song;
-                unawaited(_cacheService
-                    .cacheSong(song, stream.url, headers: stream.headers)
-                    .then((_) {
-                  if (_currentlyCachingSong?.videoId == song.videoId) {
-                    _currentlyCachingSong = null;
-                  }
-                }).catchError((e) {
-                  debugPrint('Background auto-cache dilewati: $e');
-                  if (_currentlyCachingSong?.videoId == song.videoId) {
-                    _currentlyCachingSong = null;
-                  }
-                }));
+        // Batasi auto-cache: HANYA bila diaktifkan pengguna DAN durasi <= 15 menit
+        if (autoCacheEnabled && song.durationMs <= 15 * 60 * 1000) {
+          if (_cacheService != null) {
+            _currentlyCachingSong = song;
+            unawaited(_cacheService
+                .cacheSong(song, stream.url, headers: stream.headers)
+                .then((_) {
+              if (_currentlyCachingSong?.videoId == song.videoId) {
+                _currentlyCachingSong = null;
               }
-            } else {
-              if (!autoCacheEnabled) {
-                debugPrint(
-                    'Auto-cache dilewati: Pengaturan hemat data aktif (hanya streaming porsi yang didengar).');
-              } else {
-                debugPrint(
-                    'Auto-cache dilewati untuk kompilasi panjang (durasi: ${song.durationMs}ms > 15 menit)');
+            }).catchError((e) {
+              debugPrint('Background auto-cache dilewati: $e');
+              if (_currentlyCachingSong?.videoId == song.videoId) {
+                _currentlyCachingSong = null;
               }
-            }
-
-            playSuccess = true;
-            // Catat pemakaian data streaming (per pemutaran baru, dari totalBytes stream)
-            try {
-              recordDataUsage(stream.totalBytes);
-            } catch (e) {
-              debugPrint('[AudioPlayerService] recordDataUsage error: $e');
-            }
+            }));
+          }
+        } else {
+          if (!autoCacheEnabled) {
             debugPrint(
-                'Berhasil memuat stream videoId: ${song.videoId} menggunakan klien: ${stream.clientName}');
-            break; // BERHENTI di klien pertama yang berhasil
-          } catch (e) {
-            errorCount++;
-            lastError = e;
-            final errStr = e.toString();
-            final is403 =
-                errStr.contains('403') || errStr.contains('Forbidden');
-            if (!is403) {
-              allAre403 = false;
-            }
+                'Auto-cache dilewati: Pengaturan hemat data aktif (hanya streaming porsi yang didengar).');
+          } else {
             debugPrint(
-                'Klien $candidateName gagal memutar videoId: ${song.videoId} (error: $errStr). Melanjutkan ke klien berikutnya...');
+                'Auto-cache dilewati untuk kompilasi panjang (durasi: ${song.durationMs}ms > 15 menit)');
           }
         }
 
-        if (!playSuccess) {
-          // Hanya bila SEMUA klien gagal, lempar AppException
-          final isForbidden = (errorCount > 0 && allAre403);
-          final errorMsg = isForbidden
-              ? 'server menolak akses stream (kemungkinan proteksi bot di jaringan ini).'
-              : 'tidak dapat mengambil data stream.';
-          debugPrint(
-              '[AudioPlayerService] Gagal total memutar videoId: ${song.videoId} di SEMUA klien. '
-              'Klien terakhir: $lastClientName, Error terakhir: $lastError');
-          throw AppException('Gagal memutar lagu: $errorMsg', lastError);
+        // Catat pemakaian data streaming (per pemutaran baru, dari totalBytes stream)
+        try {
+          recordDataUsage(stream.totalBytes);
+        } catch (e) {
+          debugPrint('[AudioPlayerService] recordDataUsage error: $e');
         }
+        debugPrint(
+            'Berhasil memuat stream videoId: ${song.videoId} menggunakan klien: ${stream.clientName}');
       }
 
       await _player.play();
+      _consecutiveFailures = 0;
+      _playbackError = null;
       await _recordPlay(song);
     } catch (e) {
       // CLEANUP SAAT GAGAL TOTAL:
@@ -680,13 +654,35 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         }
       }
 
-      // Emit state agar UI terupdate dan tidak stuck loading
+      // 4. Klasifikasi error berdasarkan tipe
+      final classifiedError = classifyPlaybackError(e, songTitle: song.title);
+      _playbackError = classifiedError;
+      _consecutiveFailures++;
       _emitState();
 
-      if (e is AppException) {
-        rethrow;
+      debugPrint(
+          '[AudioPlayerService] Lagu "${song.title}" (${song.videoId}) gagal diputar: $classifiedError (gagal beruntun: $_consecutiveFailures/3)');
+
+      // 5. Batasi: bila 3 lagu BERUNTUN gagal, BERHENTI dan tampilkan error terakhir saja
+      if (_consecutiveFailures >= 3) {
+        debugPrint(
+            '[AudioPlayerService] 3 lagu beruntun gagal diputar. Menghentikan antrean pemutaran.');
+        throw AppException(classifiedError, e);
       }
-      throw AppException('Gagal memutar lagu: $e', e);
+
+      // 6. Lanjut otomatis ke lagu berikut di antrean (panggil next() internal)
+      final hasNext = _currentIndex < _queue.length - 1 ||
+          (_repeatMode == RepeatMode.all && _queue.isNotEmpty) ||
+          (_isAutoMix && _queue.isNotEmpty);
+
+      if (hasNext) {
+        debugPrint(
+            '[AudioPlayerService] Auto-skip ke lagu berikutnya di antrean...');
+        await Future.delayed(const Duration(milliseconds: 300));
+        await next();
+      } else {
+        throw AppException(classifiedError, e);
+      }
     }
   }
 
@@ -803,7 +799,6 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         try {
           final freshStream = await _youTubeService.resolveStreamUrl(
             _currentSong!.videoId,
-            clientStartIndex: 1,
           );
           final audioSource = YouTubeAudioSource(
             uri: freshStream.url,
@@ -815,7 +810,6 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
             onReResolveUrl: () async {
               final reStream = await _youTubeService.resolveStreamUrl(
                 _currentSong!.videoId,
-                clientStartIndex: 1,
               );
               return (url: reStream.url, headers: reStream.headers);
             },
