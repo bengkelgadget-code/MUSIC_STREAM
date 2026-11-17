@@ -2,6 +2,6 @@
   "version_code": 27,
   "version_name": "1.3.9",
   "download_url": "https://github.com/bengkelgadget-code/MUSIC_STREAM/releases/download/v1.3.9/Setel.apk",
-  "changelog": "Perbaikan pemutaran terhenti, chunk integrity, mid-playback auto-resume, dan proteksi crash Hive (v1.3.9).",
+  "changelog": "Pembaruan otomatis dari GitHub Actions versi v1.3.9.",
   "force_update": false
 }
