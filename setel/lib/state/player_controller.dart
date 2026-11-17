@@ -118,6 +118,8 @@ class PlayerController extends Notifier<PlayerControllerState> {
         chapterIndex: playerState.chapterIndex,
         isAutoMix: playerState.isAutoMix,
         mixSeedTitle: playerState.mixSeedTitle,
+        playbackError: playerState.playbackError,
+        clearPlaybackError: playerState.playbackError == null,
       );
     });
 
@@ -129,6 +131,7 @@ class PlayerController extends Notifier<PlayerControllerState> {
   }
 
   void clearPlaybackError() {
+    _audioPlayerService.clearPlaybackError();
     if (state.playbackError != null) {
       state = state.copyWith(clearPlaybackError: true);
     }

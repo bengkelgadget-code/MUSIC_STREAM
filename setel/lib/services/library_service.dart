@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 import 'package:uuid/uuid.dart';
 
@@ -243,23 +244,27 @@ class LibraryServiceImpl implements LibraryService {
   @override
   Future<void> savePlaybackPosition(String videoId, int positionMs) async {
     if (videoId.isEmpty) return;
-    final posBox = Hive.isBoxOpen(BOX_PLAYBACK_POSITIONS)
-        ? Hive.box<int>(BOX_PLAYBACK_POSITIONS)
-        : await Hive.openBox<int>(BOX_PLAYBACK_POSITIONS);
-    await posBox.put(videoId, positionMs);
+    try {
+      final posBox = Hive.isBoxOpen(BOX_PLAYBACK_POSITIONS)
+          ? Hive.box<int>(BOX_PLAYBACK_POSITIONS)
+          : await Hive.openBox<int>(BOX_PLAYBACK_POSITIONS);
+      await posBox.put(videoId, positionMs);
 
-    if (Hive.isBoxOpen(BOX_HISTORY)) {
-      final historyBox = Hive.box<HistoryEntry>(BOX_HISTORY);
-      for (int i = historyBox.length - 1; i >= 0; i--) {
-        final entry = historyBox.getAt(i);
-        if (entry != null && entry.videoId == videoId) {
-          await historyBox.putAt(
-            i,
-            entry.copyWith(lastPositionMs: positionMs),
-          );
-          break;
+      if (Hive.isBoxOpen(BOX_HISTORY)) {
+        final historyBox = Hive.box<HistoryEntry>(BOX_HISTORY);
+        for (int i = historyBox.length - 1; i >= 0; i--) {
+          final entry = historyBox.getAt(i);
+          if (entry != null && entry.videoId == videoId) {
+            await historyBox.putAt(
+              i,
+              entry.copyWith(lastPositionMs: positionMs),
+            );
+            break;
+          }
         }
       }
+    } catch (e) {
+      debugPrint('[LibraryService] savePlaybackPosition error: $e');
     }
   }
 

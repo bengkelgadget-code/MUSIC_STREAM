@@ -33,6 +33,7 @@ class PlayerState {
   final int chapterIndex;
   final bool isAutoMix;
   final String? mixSeedTitle;
+  final String? playbackError;
 
   const PlayerState({
     this.isPlaying = false,
@@ -48,6 +49,7 @@ class PlayerState {
     this.chapterIndex = -1,
     this.isAutoMix = false,
     this.mixSeedTitle,
+    this.playbackError,
   });
 
   bool get hasChapters => chapters.length >= 2;
@@ -72,6 +74,8 @@ class PlayerState {
     int? chapterIndex,
     bool? isAutoMix,
     String? mixSeedTitle,
+    String? playbackError,
+    bool clearPlaybackError = false,
   }) {
     return PlayerState(
       isPlaying: isPlaying ?? this.isPlaying,
@@ -93,6 +97,9 @@ class PlayerState {
       mixSeedTitle: clearMixSeed
           ? null
           : (mixSeedTitle ?? this.mixSeedTitle),
+      playbackError: clearPlaybackError
+          ? null
+          : (playbackError ?? this.playbackError),
     );
   }
 }
@@ -109,6 +116,7 @@ abstract class AudioPlayerService {
   Future<void> setRepeatMode(RepeatMode mode);
   Future<void> addToQueueNext(Song song); // "play next"
   void saveCurrentPosition({bool resetToZero = false});
+  void clearPlaybackError();
 
   Stream<PlayerState>
       get playerState; // isPlaying, position, currentSong, queue, shuffle, repeatMode
@@ -125,6 +133,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       StreamController<PlayerState>.broadcast();
 
   StreamSubscription? _playerStateSub;
+  StreamSubscription? _playbackEventSub;
   StreamSubscription? _positionSub;
   StreamSubscription? _durationSub;
   StreamSubscription? _processingStateSub;
@@ -146,6 +155,9 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   String? _mixSeedTitle;
   int _autoMixSessionId = 0;
   Song? _currentlyCachingSong;
+  String? _playbackError;
+  bool _isRecoveringPlayback = false;
+  int _recoveryAttempts = 0;
 
   int _findChapterIndex(Duration pos, List<SongChapter> chapters) {
     if (chapters.isEmpty) return -1;
@@ -185,6 +197,14 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         duration: _player.duration ?? Duration.zero,
         processingState: state.processingState,
       );
+    }, onError: (err, stackTrace) {
+      _handlePlaybackError('PlayerStateStream error: $err', stackTrace);
+    });
+
+    _playbackEventSub = _player.playbackEventStream.listen((event) {
+      // Stream event pemutaran normal
+    }, onError: (err, stackTrace) {
+      _handlePlaybackError('PlaybackEventStream error: $err', stackTrace);
     });
 
     _positionSub = _player.positionStream.listen((pos) {
@@ -249,8 +269,72 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     if (song == null || _libraryService == null) return;
     final posMs = resetToZero ? 0 : _player.position.inMilliseconds;
     if (!resetToZero && posMs < 2000) return;
-    _libraryService.savePlaybackPosition(song.videoId, posMs);
+    try {
+      _libraryService
+          .savePlaybackPosition(song.videoId, posMs)
+          .catchError((e) {
+        debugPrint('[AudioPlayerService] savePlaybackPosition error: $e');
+      });
+    } catch (e) {
+      debugPrint('[AudioPlayerService] saveCurrentPosition sync error: $e');
+    }
     _lastPositionSaveTime = DateTime.now();
+  }
+
+  @override
+  void clearPlaybackError() {
+    _playbackError = null;
+    _emitState();
+  }
+
+  Future<void> _handlePlaybackError(Object error, [StackTrace? stackTrace]) async {
+    final song = _currentSong;
+    final currentPos = _player.position;
+    debugPrint(
+        '[AudioPlayerService] track error: videoId: ${song?.videoId}, title: ${song?.title}, position: $currentPos, error: $error');
+
+    if (song == null || _isRecoveringPlayback) return;
+
+    if (_recoveryAttempts < 1) {
+      _recoveryAttempts++;
+      _isRecoveringPlayback = true;
+      debugPrint(
+          '[AudioPlayerService] Mencoba auto-resume pemutaran untuk videoId: ${song.videoId} pada posisi $currentPos...');
+      try {
+        final freshStream = await _youTubeService.resolveStreamUrl(
+          song.videoId,
+          clientStartIndex: 1,
+        );
+        final audioSource = YouTubeAudioSource(
+          uri: freshStream.url,
+          headers: freshStream.headers,
+          totalBytes: freshStream.totalBytes,
+          contentType: freshStream.contentType,
+          tag: song,
+          videoId: song.videoId,
+          onReResolveUrl: () async {
+            final reStream = await _youTubeService.resolveStreamUrl(
+              song.videoId,
+              clientStartIndex: 1,
+            );
+            return (url: reStream.url, headers: reStream.headers);
+          },
+        );
+        await _player.setAudioSource(audioSource, initialPosition: currentPos);
+        await _player.play();
+        _isRecoveringPlayback = false;
+        debugPrint(
+            '[AudioPlayerService] Auto-resume berhasil untuk videoId: ${song.videoId} pada posisi $currentPos');
+        return;
+      } catch (recoveryErr) {
+        debugPrint(
+            '[AudioPlayerService] Auto-resume gagal untuk videoId: ${song.videoId}: $recoveryErr');
+        _isRecoveringPlayback = false;
+      }
+    }
+
+    _playbackError = 'Pemutaran terputus: koneksi YouTube gagal dipulihkan.';
+    _emitState();
   }
 
   void _emitState() {
@@ -270,12 +354,15 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       chapterIndex: _chapterIndex,
       isAutoMix: _isAutoMix,
       mixSeedTitle: _mixSeedTitle,
+      playbackError: _playbackError,
     );
     _stateController.add(state);
   }
 
   Future<void> _handleTrackEnded() async {
     try {
+      debugPrint(
+          '[AudioPlayerService] track ended: videoId: ${_currentSong?.videoId}, title: ${_currentSong?.title}, position: ${_player.position}, duration: ${_player.duration}');
       saveCurrentPosition(resetToZero: true);
 
       // Cek jika sleep timer "Habis lagu ini" aktif
@@ -385,6 +472,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     if (_currentIndex < 0 || _currentIndex >= _queue.length) return;
     final song = _queue[_currentIndex];
     _currentSong = song;
+    _playbackError = null;
+    _recoveryAttempts = 0;
 
     // Reset chapter state untuk lagu baru
     _chapters = [];
@@ -480,6 +569,14 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
               totalBytes: stream.totalBytes,
               contentType: stream.contentType,
               tag: song,
+              videoId: song.videoId,
+              onReResolveUrl: () async {
+                final reStream = await _youTubeService.resolveStreamUrl(
+                  song.videoId,
+                  clientStartIndex: 1,
+                );
+                return (url: reStream.url, headers: reStream.headers);
+              },
             );
 
             await _player.setAudioSource(audioSource, initialPosition: initPos);
@@ -520,7 +617,11 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
             playSuccess = true;
             // Catat pemakaian data streaming (per pemutaran baru, dari totalBytes stream)
-            recordDataUsage(stream.totalBytes);
+            try {
+              recordDataUsage(stream.totalBytes);
+            } catch (e) {
+              debugPrint('[AudioPlayerService] recordDataUsage error: $e');
+            }
             debugPrint(
                 'Berhasil memuat stream videoId: ${song.videoId} menggunakan klien: ${stream.clientName}');
             break; // BERHENTI di klien pertama yang berhasil
@@ -710,6 +811,14 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
             totalBytes: freshStream.totalBytes,
             contentType: freshStream.contentType,
             tag: _currentSong,
+            videoId: _currentSong!.videoId,
+            onReResolveUrl: () async {
+              final reStream = await _youTubeService.resolveStreamUrl(
+                _currentSong!.videoId,
+                clientStartIndex: 1,
+              );
+              return (url: reStream.url, headers: reStream.headers);
+            },
           );
           await _player.setAudioSource(audioSource, initialPosition: position);
           await _player.play();
@@ -876,6 +985,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     saveCurrentPosition();
     _sleepTimer?.cancel();
     _playerStateSub?.cancel();
+    _playbackEventSub?.cancel();
     _positionSub?.cancel();
     _durationSub?.cancel();
     _processingStateSub?.cancel();

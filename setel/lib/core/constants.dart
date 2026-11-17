@@ -26,9 +26,13 @@ const String KEY_CACHE_WIFI_ONLY = 'cache_wifi_only';
 /// Catat akumulasi pemakaian data (streaming & cache) ke Hive box settings
 void recordDataUsage(int bytes) {
   if (bytes <= 0) return;
-  if (!Hive.isBoxOpen(BOX_SETTINGS)) return;
-  final box = Hive.box(BOX_SETTINGS);
-  final current = (box.get(KEY_DATA_USED_BYTES, defaultValue: 0) as int?) ?? 0;
-  box.put(KEY_DATA_USED_BYTES, current + bytes);
+  try {
+    if (!Hive.isBoxOpen(BOX_SETTINGS)) return;
+    final box = Hive.box(BOX_SETTINGS);
+    final current = (box.get(KEY_DATA_USED_BYTES, defaultValue: 0) as int?) ?? 0;
+    box.put(KEY_DATA_USED_BYTES, current + bytes);
+  } catch (e) {
+    // Abaikan gagal catat pemakaian data agar tidak mengganggu pemutaran
+  }
 }
 

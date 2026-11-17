@@ -16,6 +16,7 @@ import 'package:setel/models/song.dart';
 import 'package:setel/models/song_chapter.dart';
 import 'package:setel/services/audio_handler.dart';
 import 'package:setel/services/audio_player_service.dart';
+import 'package:setel/services/library_service.dart';
 import 'package:setel/services/youtube_service.dart';
 import 'package:setel/state/providers.dart';
 
@@ -103,6 +104,9 @@ class FailingAudioPlayerService implements AudioPlayerService {
   Future<void> addToQueueNext(Song song) async {
     throw AppException('Gagal memutar lagu: Queue insert failed');
   }
+
+  @override
+  void clearPlaybackError() {}
 }
 
 void main() {
@@ -317,6 +321,15 @@ void main() {
       expect(handler.playbackState.value.playing, isFalse);
       expect(handler.playbackState.value.processingState,
           AudioProcessingState.idle);
+    });
+
+    test('savePlaybackPosition dan recordDataUsage tidak melempar exception saat tulis gagal', () async {
+      final libraryService = LibraryServiceImpl();
+      await expectLater(libraryService.savePlaybackPosition('', 1000), completes);
+      await expectLater(libraryService.savePlaybackPosition('vid_test_safe', 5000), completes);
+
+      expect(() => recordDataUsage(-1), returnsNormally);
+      expect(() => recordDataUsage(1024), returnsNormally);
     });
   });
 }

@@ -77,6 +77,9 @@ class DummyAudioPlayerService implements AudioPlayerService {
 
   @override
   Future<void> togglePlayPause() async {}
+
+  @override
+  void clearPlaybackError() {}
 }
 
 void main() {
