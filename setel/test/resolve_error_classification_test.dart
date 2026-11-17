@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:just_audio/just_audio.dart' hide PlayerState;
 import 'package:setel/core/errors.dart';
 import 'package:setel/models/song.dart';
 import 'package:setel/models/song_chapter.dart';
@@ -25,7 +27,8 @@ class FakeConnectivity implements Connectivity {
 
 class TrackingYouTubeService implements YouTubeService {
   int resolveCallCount = 0;
-  final Future<AudioStreamResult> Function(String videoId)? onResolve;
+  final List<int> clientStartIndices = [];
+  final Future<AudioStreamResult> Function(String videoId, int clientStartIndex)? onResolve;
 
   TrackingYouTubeService({this.onResolve});
 
@@ -33,8 +36,9 @@ class TrackingYouTubeService implements YouTubeService {
   Future<AudioStreamResult> resolveStreamUrl(String videoId,
       {int clientStartIndex = 0}) async {
     resolveCallCount++;
+    clientStartIndices.add(clientStartIndex);
     if (onResolve != null) {
-      return onResolve!(videoId);
+      return onResolve!(videoId, clientStartIndex);
     }
     throw AppException(
       'Gagal memuat stream audio untuk video $videoId: 403 Forbidden',
@@ -59,6 +63,37 @@ class TrackingYouTubeService implements YouTubeService {
         durationMs: 180000,
         thumbnailUrl: '',
       );
+}
+
+class MockAudioPlayer extends AudioPlayer {
+  int setAudioSourceCallCount = 0;
+  int playCallCount = 0;
+  int stopCallCount = 0;
+  Future<Duration?> Function(AudioSource source)? onSetAudioSource;
+
+  @override
+  Future<Duration?> setAudioSource(
+    AudioSource source, {
+    bool preload = true,
+    Duration? initialPosition,
+    int? initialIndex,
+  }) async {
+    setAudioSourceCallCount++;
+    if (onSetAudioSource != null) {
+      return onSetAudioSource!(source);
+    }
+    return Duration.zero;
+  }
+
+  @override
+  Future<void> play() async {
+    playCallCount++;
+  }
+
+  @override
+  Future<void> stop() async {
+    stopCallCount++;
+  }
 }
 
 void main() {
@@ -164,6 +199,64 @@ void main() {
       );
     });
 
+    test('Kategori SOURCE ERROR dipetakan ke pesan manusiawi yang benar', () {
+      // 1. PlatformException('0', 'Source error')
+      final msg1 = classifyPlaybackError(
+        PlatformException(code: '0', message: 'Source error'),
+      );
+      expect(
+        msg1,
+        'Gagal memuat audio: sumber stream ditolak atau kedaluwarsa. Coba putar lagi atau ganti jaringan.',
+      );
+
+      // 2. AppException membungkus PlatformException('0')
+      final msg2 = classifyPlaybackError(
+        AppException(
+          'Stream failed',
+          PlatformException(code: '0', message: 'Source error details'),
+        ),
+      );
+      expect(
+        msg2,
+        'Gagal memuat audio: sumber stream ditolak atau kedaluwarsa. Coba putar lagi atau ganti jaringan.',
+      );
+
+      // 3. String mengandung 'source error'
+      final msg3 = classifyPlaybackError(
+        Exception('ExoPlayer TYPE_SOURCE: Source error encountered'),
+      );
+      expect(
+        msg3,
+        'Gagal memuat audio: sumber stream ditolak atau kedaluwarsa. Coba putar lagi atau ganti jaringan.',
+      );
+    });
+
+    test('Kategori (d) LAINNYA: wrapper PlatformException terkupas bersih tanpa kata PlatformException(', () {
+      // 1. PlatformException lain dengan pesan
+      final msg1 = classifyPlaybackError(
+        PlatformException(
+            code: 'ERROR_AUDIO_TRACK', message: 'AudioTrack write failed'),
+      );
+      expect(msg1, 'Gagal memutar lagu: AudioTrack write failed.');
+      expect(msg1, isNot(contains('PlatformException')));
+      expect(msg1, isNot(contains('ERROR_AUDIO_TRACK')));
+
+      // 2. PlatformException dengan pesan kosong/null -> fallback ramah
+      final msg2 = classifyPlaybackError(
+        PlatformException(code: '99', message: null),
+      );
+      expect(msg2, 'Gagal memutar lagu, coba lagi.');
+      expect(msg2, isNot(contains('PlatformException')));
+      expect(msg2, isNot(contains('99')));
+
+      // 3. String mentah Exception mengandung 'PlatformException(code, message)'
+      final msg3 = classifyPlaybackError(
+        Exception('PlatformException(12, Hardware decoder failed, null, null)'),
+      );
+      expect(msg3, 'Gagal memutar lagu: Hardware decoder failed.');
+      expect(msg3, isNot(contains('PlatformException')));
+    });
+
     test('Kategori (d) LAINNYA menampilkan ringkasan error asli tanpa pesan generik', () {
       final msg1 = classifyPlaybackError(
         Exception('Media codec initialization failed during hardware decoding'),
@@ -249,7 +342,7 @@ void main() {
     test('Lagu gagal total auto-skip ke lagu berikutnya dalam antrean', () async {
       int resolveAttempt = 0;
       final trackingYt = TrackingYouTubeService(
-        onResolve: (videoId) async {
+        onResolve: (videoId, clientStartIndex) async {
           resolveAttempt++;
           if (videoId == 'bad_vid_1') {
             throw VideoUnplayableException('Video unavailable');
@@ -300,7 +393,7 @@ void main() {
     test('3 lagu beruntun gagal -> BERHENTI dan tidak melanjutkan loop', () async {
       int calls = 0;
       final trackingYt = TrackingYouTubeService(
-        onResolve: (videoId) async {
+        onResolve: (videoId, clientStartIndex) async {
           calls++;
           throw VideoUnplayableException('Video removed');
         },
@@ -331,6 +424,146 @@ void main() {
 
       // Berhenti tepat setelah 3 lagu beruntun gagal (lagu 4 tidak diputar)
       expect(calls, 3);
+    });
+  });
+
+  group('Poin 2: Retry 1x setAudioSource dengan URL Segar', () {
+    test(
+        'setAudioSource throw source error memicu tepat 1x resolve ulang + 1x setAudioSource ulang lalu sukses',
+        () async {
+      int resolveCalls = 0;
+      final List<int> startIndices = [];
+
+      final trackingYt = TrackingYouTubeService(
+        onResolve: (videoId, clientStartIndex) async {
+          resolveCalls++;
+          startIndices.add(clientStartIndex);
+          return AudioStreamResult(
+            url: Uri.parse(
+                'https://googlevideo.com/playback_$clientStartIndex'),
+            headers: {'User-Agent': 'Test'},
+            clientName:
+                clientStartIndex == 0 ? 'androidSdkless' : 'androidVr',
+            totalBytes: 500000,
+          );
+        },
+      );
+
+      final mockAudioPlayer = MockAudioPlayer();
+      int setSourceCount = 0;
+      mockAudioPlayer.onSetAudioSource = (source) async {
+        setSourceCount++;
+        if (setSourceCount == 1) {
+          // Panggilan pertama gagal dengan PlatformException code '0' (Source error)
+          throw PlatformException(code: '0', message: 'Source error');
+        }
+        // Panggilan kedua (retry) sukses
+        return const Duration(seconds: 180);
+      };
+
+      final onlineConn = FakeConnectivity([ConnectivityResult.wifi]);
+      final handler = SetelAudioHandler();
+
+      final player = AudioPlayerServiceImpl(
+        player: mockAudioPlayer,
+        youTubeService: trackingYt,
+        audioHandler: handler,
+        connectivity: onlineConn,
+      );
+
+      PlayerState? lastState;
+      final sub = player.playerState.listen((s) => lastState = s);
+      addTearDown(sub.cancel);
+
+      const song = Song(
+        videoId: 'vid_retry_success',
+        title: 'Retry Song',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+
+      await player.playSong(song);
+
+      // Tepat 1x resolve pertama + 1x resolve ulang dengan clientStartIndex: 1
+      expect(resolveCalls, 2);
+      expect(startIndices, [0, 1]);
+
+      // Tepat 1x setAudioSource pertama + 1x retry setAudioSource
+      expect(setSourceCount, 2);
+      expect(mockAudioPlayer.playCallCount, 1);
+
+      // State tidak memiliki playbackError
+      expect(lastState?.playbackError, isNull);
+    });
+
+    test(
+        'Bila retry setAudioSource tetap gagal, error terklasifikasi (bukan mentah)',
+        () async {
+      int resolveCalls = 0;
+
+      final trackingYt = TrackingYouTubeService(
+        onResolve: (videoId, clientStartIndex) async {
+          resolveCalls++;
+          return AudioStreamResult(
+            url: Uri.parse(
+                'https://googlevideo.com/playback_$clientStartIndex'),
+            headers: {'User-Agent': 'Test'},
+            clientName: 'testClient',
+            totalBytes: 500000,
+          );
+        },
+      );
+
+      final mockAudioPlayer = MockAudioPlayer();
+      mockAudioPlayer.onSetAudioSource = (source) async {
+        // Kedua panggilan (pertama dan retry) gagal dengan source error
+        throw PlatformException(code: '0', message: 'Source error');
+      };
+
+      final onlineConn = FakeConnectivity([ConnectivityResult.wifi]);
+      final handler = SetelAudioHandler();
+
+      final player = AudioPlayerServiceImpl(
+        player: mockAudioPlayer,
+        youTubeService: trackingYt,
+        audioHandler: handler,
+        connectivity: onlineConn,
+      );
+
+      final states = <PlayerState>[];
+      final sub = player.playerState.listen(states.add);
+      addTearDown(sub.cancel);
+
+      const song = Song(
+        videoId: 'vid_retry_fail',
+        title: 'Retry Fail Song',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+
+      try {
+        await player.playSong(song);
+      } catch (_) {}
+
+      await pumpEventQueue();
+
+      // Tepat 1x resolve awal + 1x resolve ulang
+      expect(resolveCalls, 2);
+      expect(mockAudioPlayer.setAudioSourceCallCount, 2);
+
+      // Error harus terklasifikasi ke pesan manusiawi yang bersih, bukan mentah 'PlatformException(0, ...)'
+      final errorStates = states.where((s) => s.playbackError != null).toList();
+      expect(errorStates, isNotEmpty,
+          reason: 'All emitted playbackErrors: ${states.map((s) => s.playbackError).toList()}');
+      final lastErrState = errorStates.last;
+      expect(
+        lastErrState.playbackError,
+        'Gagal memuat audio: sumber stream ditolak atau kedaluwarsa. Coba putar lagi atau ganti jaringan.',
+      );
+      expect(lastErrState.playbackError, isNot(contains('PlatformException')));
+      expect(lastErrState.playbackError, isNot(contains('(0)')));
     });
   });
 }

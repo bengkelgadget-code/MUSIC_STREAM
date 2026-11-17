@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 import 'package:just_audio/just_audio.dart';
 
@@ -161,6 +162,24 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   bool _isRecoveringPlayback = false;
   int _recoveryAttempts = 0;
   int _consecutiveFailures = 0;
+
+  bool _isSourceError(Object error) {
+    Object current = error;
+    while (current is AppException && current.cause != null) {
+      current = current.cause!;
+    }
+    if (current is PlatformException) {
+      if (current.code == '0') return true;
+      final msg = (current.message ?? '').toLowerCase();
+      if (msg.contains('source error')) return true;
+    }
+    if (current is StreamChunkException) {
+      return true;
+    }
+    final errStr = error.toString().toLowerCase();
+    return errStr.contains('source error') ||
+        (error is PlatformException && error.code == '0');
+  }
 
   int _findChapterIndex(Duration pos, List<SongChapter> chapters) {
     if (chapters.isEmpty) return -1;
@@ -563,22 +582,51 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         debugPrint(
             'Cache miss. Me-resolve stream YouTube audio untuk videoId: ${song.videoId}');
 
-        final stream = await _youTubeService.resolveStreamUrl(song.videoId);
+        var stream = await _youTubeService.resolveStreamUrl(song.videoId);
 
-        final audioSource = YouTubeAudioSource(
-          uri: stream.url,
-          headers: stream.headers,
-          totalBytes: stream.totalBytes,
-          contentType: stream.contentType,
-          tag: song,
-          videoId: song.videoId,
-          onReResolveUrl: () async {
-            final reStream = await _youTubeService.resolveStreamUrl(song.videoId);
-            return (url: reStream.url, headers: reStream.headers);
-          },
-        );
+        YouTubeAudioSource createAudioSource(AudioStreamResult streamInfo) {
+          return YouTubeAudioSource(
+            uri: streamInfo.url,
+            headers: streamInfo.headers,
+            totalBytes: streamInfo.totalBytes,
+            contentType: streamInfo.contentType,
+            tag: song,
+            videoId: song.videoId,
+            onReResolveUrl: () async {
+              final reStream =
+                  await _youTubeService.resolveStreamUrl(song.videoId);
+              return (url: reStream.url, headers: reStream.headers);
+            },
+          );
+        }
 
-        await _player.setAudioSource(audioSource, initialPosition: initPos);
+        var audioSource = createAudioSource(stream);
+
+        try {
+          await _player.setAudioSource(audioSource, initialPosition: initPos);
+        } catch (setSourceErr) {
+          if (_isSourceError(setSourceErr)) {
+            debugPrint(
+                '[AudioPlayerService] setAudioSource gagal (source error: $setSourceErr), retry dengan URL segar...');
+            try {
+              stream = await _youTubeService.resolveStreamUrl(
+                song.videoId,
+                clientStartIndex: 1,
+              );
+              audioSource = createAudioSource(stream);
+              await _player.setAudioSource(audioSource,
+                  initialPosition: initPos);
+              debugPrint(
+                  '[AudioPlayerService] setAudioSource retry berhasil dengan URL segar (${stream.clientName}).');
+            } catch (retryErr) {
+              debugPrint(
+                  '[AudioPlayerService] setAudioSource retry gagal: $retryErr');
+              rethrow;
+            }
+          } else {
+            rethrow;
+          }
+        }
 
         // Cek pengaturan auto_cache_enabled (default: false untuk menghemat kuota)
         final settingsBox =
@@ -628,7 +676,10 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       _consecutiveFailures = 0;
       _playbackError = null;
       await _recordPlay(song);
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint(
+          '[AudioPlayerService] Error lengkap saat memutar videoId: ${song.videoId}, judul: "${song.title}": $e\n$stackTrace');
+
       // CLEANUP SAAT GAGAL TOTAL:
       // 1. Reset just_audio dari state loading/error yang nyangkut
       try {

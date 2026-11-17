@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 class AppException implements Exception {
@@ -77,17 +78,49 @@ String classifyPlaybackError(Object error, {String? songTitle}) {
     return 'Server menolak akses stream (kemungkinan proteksi bot di jaringan ini). Coba ganti jaringan (WiFi lain / data seluler).';
   }
 
+  // SOURCE ERROR (ExoPlayer TYPE_SOURCE / stream load failure / googlevideo kedaluwarsa)
+  if ((root is PlatformException && root.code == '0') ||
+      (error is PlatformException && error.code == '0') ||
+      allErrorsCombined.contains('source error')) {
+    return 'Gagal memuat audio: sumber stream ditolak atau kedaluwarsa. Coba putar lagi atau ganti jaringan.';
+  }
+
   // d. LAINNYA
-  String cleanMsg = root
-      .toString()
-      .replaceAll(RegExp(r'^(Exception|AppException):\s*'), '')
-      .trim();
-  if (cleanMsg.isEmpty) {
-    cleanMsg = error
+  String cleanMsg = '';
+  if (root is PlatformException) {
+    cleanMsg = root.message?.trim() ?? '';
+  } else if (error is PlatformException) {
+    cleanMsg = error.message?.trim() ?? '';
+  } else {
+    cleanMsg = root
         .toString()
         .replaceAll(RegExp(r'^(Exception|AppException):\s*'), '')
         .trim();
+    if (cleanMsg.isEmpty) {
+      cleanMsg = error
+          .toString()
+          .replaceAll(RegExp(r'^(Exception|AppException):\s*'), '')
+          .trim();
+    }
+    // Bila string masih terbungkus format PlatformException(code, message, details, ...)
+    if (cleanMsg.contains('PlatformException(')) {
+      final match = RegExp(r'PlatformException\([^,]*,\s*([^,)]*)')
+          .firstMatch(cleanMsg);
+      if (match != null && match.group(1) != null) {
+        cleanMsg = match.group(1)!.trim();
+        if (cleanMsg == 'null') cleanMsg = '';
+      } else {
+        cleanMsg = cleanMsg
+            .replaceAll(RegExp(r'PlatformException\([^)]*\)'), '')
+            .trim();
+      }
+    }
   }
+
+  if (cleanMsg.isEmpty) {
+    return 'Gagal memutar lagu, coba lagi.';
+  }
+
   if (cleanMsg.length > 120) {
     cleanMsg = '${cleanMsg.substring(0, 117)}...';
   }
