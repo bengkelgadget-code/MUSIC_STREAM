@@ -61,33 +61,75 @@ class CacheServiceImpl implements CacheService {
 
   @override
   Future<File?> getCached(Song song) async {
+    File? candidate;
     // 1. Cek dari cachedPath yang tersimpan di model/DB
     if (song.cachedPath != null) {
       final file = File(song.cachedPath!);
       if (file.existsSync() && file.lengthSync() > 0) {
-        try {
-          await file.setLastModified(DateTime.now());
-        } catch (_) {}
-        return file;
+        candidate = file;
       }
     }
 
     // 2. Cek apakah file fisik ada di folder cache
-    final cacheDir = await _getCacheDir();
-    final targetFile = File('${cacheDir.path}/${song.videoId}.m4a');
-    if (targetFile.existsSync() && targetFile.lengthSync() > 0) {
+    if (candidate == null) {
+      final cacheDir = await _getCacheDir();
+      final targetFile = File('${cacheDir.path}/${song.videoId}.m4a');
+      if (targetFile.existsSync() && targetFile.lengthSync() > 0) {
+        candidate = targetFile;
+      }
+    }
+
+    if (candidate != null) {
+      // 1F: Verifikasi ukuran file cache terhadap totalBytes yang direkam di .meta
+      final cacheDir = await _getCacheDir();
+      final metaFile = File('${cacheDir.path}/${song.videoId}.meta');
+      if (metaFile.existsSync()) {
+        try {
+          final metaContent = metaFile.readAsStringSync().trim();
+          final expectedBytes = int.tryParse(metaContent);
+          if (expectedBytes != null && expectedBytes > 0) {
+            final actualBytes = candidate.lengthSync();
+            // Toleransi kecil ±1KB (1024 bytes) untuk selisih metadata
+            if ((actualBytes - expectedBytes).abs() > 1024) {
+              debugPrint(
+                  'CacheService: File cache corrupt/parsial untuk ${song.videoId} (panjang: $actualBytes, diharapkan: $expectedBytes). Menghapus cache...');
+              try {
+                await candidate.delete();
+              } catch (_) {}
+              try {
+                await metaFile.delete();
+              } catch (_) {}
+
+              final songsBox = Hive.box<Song>(BOX_SONGS);
+              final existingSong = songsBox.get(song.videoId);
+              if (existingSong != null) {
+                await songsBox.put(
+                  song.videoId,
+                  existingSong.copyWith(clearCachedPath: true),
+                );
+              }
+              return null;
+            }
+          }
+        } catch (metaReadErr) {
+          debugPrint('CacheService: Gagal membaca .meta: $metaReadErr');
+        }
+      }
+
       try {
-        await targetFile.setLastModified(DateTime.now());
+        await candidate.setLastModified(DateTime.now());
       } catch (_) {}
 
       // Sinkronkan cachedPath ke database lokal songsBox
       final songsBox = Hive.box<Song>(BOX_SONGS);
       final existingSong = songsBox.get(song.videoId) ?? song;
-      await songsBox.put(
-        song.videoId,
-        existingSong.copyWith(cachedPath: targetFile.path),
-      );
-      return targetFile;
+      if (existingSong.cachedPath != candidate.path) {
+        await songsBox.put(
+          song.videoId,
+          existingSong.copyWith(cachedPath: candidate.path),
+        );
+      }
+      return candidate;
     }
 
     return null;
@@ -108,6 +150,12 @@ class CacheServiceImpl implements CacheService {
       if (tempFile.existsSync()) {
         await tempFile.delete();
         debugPrint('CacheService: File sementara .tmp untuk ${song.videoId} berhasil dihapus/dibatalkan.');
+      }
+      final metaFile = File('${cacheDir.path}/${song.videoId}.meta');
+      if (metaFile.existsSync()) {
+        try {
+          await metaFile.delete();
+        } catch (_) {}
       }
     } catch (e) {
       debugPrint('CacheService: Gagal membatalkan cache untuk ${song.videoId}: $e');
@@ -270,6 +318,15 @@ class CacheServiceImpl implements CacheService {
         }
         await tempFile.rename(targetFile.path);
 
+        // 1F: Rekam totalBytes yang diharapkan ke file .meta berdampingan
+        try {
+          final metaFile = File('${cacheDir.path}/${song.videoId}.meta');
+          final expectedBytes = totalLength ?? downloadedBytes;
+          await metaFile.writeAsString('$expectedBytes');
+        } catch (metaErr) {
+          debugPrint('CacheService: Gagal menyimpan .meta: $metaErr');
+        }
+
         // Perbarui cachedPath pada Hive box songs (HANYA simpan cachedPath lokal, TANPA streamUrl)
         final songsBox = Hive.box<Song>(BOX_SONGS);
         final existingSong = songsBox.get(song.videoId) ?? song;
@@ -340,6 +397,13 @@ class CacheServiceImpl implements CacheService {
         try {
           await file.delete();
           currentTotal -= size;
+
+          final metaFile = File('${cacheDir.path}/$videoId.meta');
+          if (metaFile.existsSync()) {
+            try {
+              await metaFile.delete();
+            } catch (_) {}
+          }
 
           // Hapus referensi cachedPath pada songsBox
           final song = songsBox.get(videoId);

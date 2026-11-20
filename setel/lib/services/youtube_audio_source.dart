@@ -45,6 +45,7 @@ class YouTubeAudioSource extends StreamAudioSource {
   final Future<({Uri url, Map<String, String> headers})> Function(
       {bool fallbackNonOpus})? onReResolveUrl;
   final HttpClient? httpClient;
+  final Duration chunkTimeout;
 
   YouTubeAudioSource({
     required this.uri,
@@ -56,6 +57,7 @@ class YouTubeAudioSource extends StreamAudioSource {
     this.isOpus = false,
     this.onReResolveUrl,
     this.httpClient,
+    this.chunkTimeout = const Duration(seconds: 15),
     super.tag,
   });
 
@@ -69,28 +71,33 @@ class YouTubeAudioSource extends StreamAudioSource {
         : (totalBytes > 0 ? totalBytes : null);
 
     Stream<List<int>> byteStream() async* {
-      final client = httpClient ?? HttpClient();
+      var client = httpClient ?? HttpClient();
       client.connectionTimeout = const Duration(seconds: 10);
       const chunkSize = 512 * 1024; // 512 KB chunk aman & responsif
       var current = startByte;
+      int? effectiveEnd = requestedEnd;
       bool hasReResolved416 = false;
-      bool hasReResolvedFirstChunk = false;
+      bool hasReResolvedMidStream = false;
+      bool hasCorrectedTotalBytes = false;
+      int totalStreamedBytes = 0;
 
       try {
-        while (requestedEnd == null || current < requestedEnd) {
-          final to = requestedEnd != null
-              ? min(current + chunkSize - 1, requestedEnd - 1)
+        while (effectiveEnd == null || current < effectiveEnd) {
+          var to = effectiveEnd != null
+              ? min(current + chunkSize - 1, effectiveEnd - 1)
               : current + chunkSize - 1;
           int expectedBytes = to - current + 1;
           int retryCount = 0;
           bool chunkSuccess = false;
 
           while (retryCount < 3 && !chunkSuccess) {
+            HttpClientRequest? req;
+            HttpClientResponse? resp;
             try {
-              final req = await client.getUrl(uri);
-              headers.forEach((k, v) => req.headers.set(k, v));
+              req = await client.getUrl(uri);
+              headers.forEach((k, v) => req!.headers.set(k, v));
               req.headers.set('Range', 'bytes=$current-$to');
-              final resp = await req.close();
+              resp = await req.close().timeout(chunkTimeout);
 
               // Status 416 (Range Not Satisfiable)
               if (resp.statusCode == 416) {
@@ -134,20 +141,29 @@ class YouTubeAudioSource extends StreamAudioSource {
                 debugPrint(
                     '[YouTubeAudioSource] Chunk $current-$to gagal (status: ${resp.statusCode}, retry: ${retryCount + 1}/3, videoId: $videoId)');
 
-                // 1B-b & 1H-b: Self-healing di dalam proxy bila chunk PERTAMA 403 atau 404
-                if (current == startByte &&
-                    (resp.statusCode == 403 || resp.statusCode == 404) &&
+                // 1A: Self-healing untuk SEMUA chunk bila status 403, 404, atau 429 (maks 1x per byteStream)
+                if ((resp.statusCode == 403 ||
+                        resp.statusCode == 404 ||
+                        resp.statusCode == 429) &&
                     onReResolveUrl != null &&
-                    !hasReResolvedFirstChunk) {
-                  hasReResolvedFirstChunk = true;
+                    !hasReResolvedMidStream) {
+                  hasReResolvedMidStream = true;
+                  lastChunkError = ChunkErrorInfo(
+                    videoId: videoId,
+                    statusCode: resp.statusCode,
+                    range: '$current-$to',
+                    clientName: clientName,
+                  );
                   debugPrint(
-                      '[YouTubeAudioSource] Chunk pertama $current-$to gagal status ${resp.statusCode} (videoId: $videoId). Mencoba self-healing re-resolve 1x (fallbackNonOpus: $isOpus)...');
+                      '[YouTubeAudioSource] Chunk $current-$to gagal status ${resp.statusCode} (videoId: $videoId). Mencoba self-healing re-resolve 1x (fallbackNonOpus: $isOpus)...');
                   try {
                     final fresh =
                         await onReResolveUrl!(fallbackNonOpus: isOpus);
                     uri = fresh.url;
                     headers = fresh.headers;
-                    continue; // Coba chunk pertama lagi dengan URL baru
+                    debugPrint(
+                        '[YouTubeAudioSource] Self-healing re-resolve berhasil untuk range $current-$to (status: ${resp.statusCode}, URL baru: ${fresh.url})');
+                    continue; // Coba chunk yang SAMA lagi dengan URL baru
                   } catch (reErr) {
                     debugPrint(
                         '[YouTubeAudioSource] Self-healing re-resolve gagal: $reErr');
@@ -160,17 +176,12 @@ class YouTubeAudioSource extends StreamAudioSource {
                   continue;
                 }
 
-                // Catat ke diagnostic holder jika chunk pertama gagal
-                if (current == startByte) {
-                  lastChunkError = ChunkErrorInfo(
-                    videoId: videoId,
-                    statusCode: resp.statusCode,
-                    range: '$current-$to',
-                    clientName: clientName,
-                  );
-                  debugPrint(
-                      '[YouTubeAudioSource] Chunk pertama gagal dicatat: $lastChunkError');
-                }
+                lastChunkError = ChunkErrorInfo(
+                  videoId: videoId,
+                  statusCode: resp.statusCode,
+                  range: '$current-$to',
+                  clientName: clientName,
+                );
 
                 debugPrint(
                     '[YouTubeAudioSource] Stream berakhir prematur / gagal setelah 3x retry pada range $current-$to (status: ${resp.statusCode}, videoId: $videoId)');
@@ -183,27 +194,44 @@ class YouTubeAudioSource extends StreamAudioSource {
                 );
               }
 
-              // Periksa Content-Range untuk menentukan apakah server memotong ke EOF asli
+              // 1C: Pada respons 206 PERTAMA tiap byteStream, parse TOTAL dari Content-Range (bytes a-b/TOTAL)
               final contentRange = resp.headers.value('content-range');
               if (contentRange != null && contentRange.startsWith('bytes ')) {
-                final rangePart = contentRange.substring(6).split('/')[0];
-                final parts = rangePart.split('-');
-                if (parts.length == 2) {
-                  final rangeEnd = int.tryParse(parts[1]);
-                  if (rangeEnd != null && rangeEnd < to) {
-                    expectedBytes = rangeEnd - current + 1;
+                final slashIdx = contentRange.indexOf('/');
+                if (slashIdx != -1) {
+                  final rangePart = contentRange.substring(6, slashIdx);
+                  final totalPart = contentRange.substring(slashIdx + 1).trim();
+                  final parts = rangePart.split('-');
+                  if (parts.length == 2) {
+                    final rangeEnd = int.tryParse(parts[1]);
+                    if (rangeEnd != null) {
+                      expectedBytes = rangeEnd - current + 1;
+                      to = rangeEnd;
+                    }
+                  }
+                  final serverTotal = int.tryParse(totalPart);
+                  if (serverTotal != null && serverTotal > 0 && !hasCorrectedTotalBytes) {
+                    hasCorrectedTotalBytes = true;
+                    if (serverTotal != totalBytes) {
+                      debugPrint(
+                          '[YouTubeAudioSource] totalBytes dikoreksi manifest=$totalBytes server=$serverTotal videoId=$videoId');
+                      if (requestedEnd == null || requestedEnd == totalBytes) {
+                        effectiveEnd = serverTotal;
+                      }
+                    }
                   }
                 }
               }
 
               final chunkBuffer = BytesBuilder(copy: false);
+              final timedStream = resp.timeout(chunkTimeout);
 
               if (resp.statusCode == 200) {
                 debugPrint(
                     '[YouTubeAudioSource] Status 200 diterima untuk range $current-$to (videoId: $videoId), memotong hanya jendela yang diminta.');
                 // Ambil hanya jendela [current, to] dari body
                 int streamPos = 0;
-                await for (final data in resp) {
+                await for (final data in timedStream) {
                   final chunkStart = streamPos;
                   final chunkEnd = streamPos + data.length - 1;
                   streamPos += data.length;
@@ -219,9 +247,20 @@ class YouTubeAudioSource extends StreamAudioSource {
                     break;
                   }
                 }
+                // 1D: Tutup respons 200 agar koneksi tidak menggantung & reset client
+                try {
+                  final socket = await resp.detachSocket();
+                  socket.destroy();
+                } catch (_) {}
+                if (httpClient == null) {
+                  try {
+                    client.close(force: true);
+                  } catch (_) {}
+                  client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+                }
               } else {
-                // 206 Partial Content: body langsung berisi byte range yang diminta
-                await for (final chunk in resp) {
+                // 206 Partial Content: body langsung berisi byte range yang diminta dengan timeout
+                await for (final chunk in timedStream) {
                   chunkBuffer.add(chunk);
                 }
               }
@@ -235,14 +274,12 @@ class YouTubeAudioSource extends StreamAudioSource {
                   await Future.delayed(const Duration(milliseconds: 250));
                   continue;
                 }
-                if (current == startByte) {
-                  lastChunkError = ChunkErrorInfo(
-                    videoId: videoId,
-                    statusCode: resp.statusCode,
-                    range: '$current-$to',
-                    clientName: clientName,
-                  );
-                }
+                lastChunkError = ChunkErrorInfo(
+                  videoId: videoId,
+                  statusCode: resp.statusCode,
+                  range: '$current-$to',
+                  clientName: clientName,
+                );
                 debugPrint(
                     '[YouTubeAudioSource] Stream berakhir prematur / gagal: body pendek setelah 3x retry pada range $current-$to (videoId: $videoId)');
                 throw StreamChunkException(
@@ -255,23 +292,61 @@ class YouTubeAudioSource extends StreamAudioSource {
               }
 
               // Chunk sukses: emit byte ke stream dan majukan current
+              final chunkLen = chunkBuffer.length;
               yield chunkBuffer.takeBytes();
               chunkSuccess = true;
+              totalStreamedBytes += chunkLen;
               current = to + 1;
             } catch (e) {
               if (e is StreamChunkException) rethrow;
-              debugPrint(
-                  '[YouTubeAudioSource] Exception saat fetch chunk $current-$to: $e (retry: ${retryCount + 1}/3, videoId: $videoId)');
-              retryCount++;
-              if (retryCount >= 3) {
-                if (current == startByte) {
+
+              // Bersihkan request / response yang gagal
+              try {
+                req?.abort();
+              } catch (_) {}
+              if (resp != null) {
+                try {
+                  final socket = await resp.detachSocket();
+                  socket.destroy();
+                } catch (_) {}
+              }
+
+              // 1B: Timeout handling per chunk
+              if (e is TimeoutException) {
+                debugPrint(
+                    '[YouTubeAudioSource] Timeout baca chunk $current-$to (tidak ada byte dalam ${chunkTimeout.inSeconds} detik, retry: ${retryCount + 1}/3, videoId: $videoId)');
+                retryCount++;
+                if (retryCount >= 3) {
                   lastChunkError = ChunkErrorInfo(
                     videoId: videoId,
                     statusCode: null,
                     range: '$current-$to',
                     clientName: clientName,
                   );
+                  debugPrint(
+                      '[YouTubeAudioSource] Stream berakhir prematur / gagal: timeout baca chunk setelah 3x retry pada range $current-$to (videoId: $videoId)');
+                  throw StreamChunkException(
+                    videoId: videoId,
+                    range: '$current-$to',
+                    statusCode: null,
+                    message:
+                        'Timeout baca chunk (tidak ada byte ${chunkTimeout.inSeconds} detik)',
+                  );
                 }
+                await Future.delayed(const Duration(milliseconds: 250));
+                continue;
+              }
+
+              debugPrint(
+                  '[YouTubeAudioSource] Exception saat fetch chunk $current-$to: $e (retry: ${retryCount + 1}/3, videoId: $videoId)');
+              retryCount++;
+              if (retryCount >= 3) {
+                lastChunkError = ChunkErrorInfo(
+                  videoId: videoId,
+                  statusCode: null,
+                  range: '$current-$to',
+                  clientName: clientName,
+                );
                 debugPrint(
                     '[YouTubeAudioSource] Stream berakhir prematur / gagal setelah 3x retry pada range $current-$to (error: $e, videoId: $videoId)');
                 throw StreamChunkException(
@@ -288,9 +363,14 @@ class YouTubeAudioSource extends StreamAudioSource {
             break;
           }
         }
+
+        // Stream selesai normal
+        final finalTotal = effectiveEnd ?? totalBytes;
+        debugPrint(
+            '[YouTubeAudioSource] Stream selesai normal videoId=$videoId totalBytes=$finalTotal totalStreamed=$totalStreamedBytes');
       } finally {
         if (httpClient == null) {
-          client.close();
+          client.close(force: true);
         }
       }
     }

@@ -169,5 +169,207 @@ void main() {
         await server.close();
       }
     });
+
+    test('chunk ke-2 balas 403 memicu self-healing re-resolve 1x dan stream berlanjut sukses', () async {
+      int reResolveCalls = 0;
+      final server1 = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final server2 = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+
+      // Server 1: chunk 1 (0-524287) sukses, chunk 2 (524288-1048575) balas 403
+      server1.listen((HttpRequest request) {
+        final range = request.headers.value('Range') ?? '';
+        if (range.contains('bytes=0-')) {
+          request.response.statusCode = HttpStatus.partialContent;
+          request.response.headers.set('Content-Range', 'bytes 0-524287/1048576');
+          request.response.add(List.filled(512 * 1024, 1));
+          request.response.close();
+        } else {
+          request.response.statusCode = HttpStatus.forbidden;
+          request.response.close();
+        }
+      });
+
+      // Server 2: URL segar setelah re-resolve, melayani chunk 2 dengan sukses
+      server2.listen((HttpRequest request) {
+        request.response.statusCode = HttpStatus.partialContent;
+        request.response.headers.set('Content-Range', 'bytes 524288-1048575/1048576');
+        request.response.add(List.filled(512 * 1024, 2));
+        request.response.close();
+      });
+
+      final uri1 = Uri.parse('http://${server1.address.host}:${server1.port}/stream1');
+      final uri2 = Uri.parse('http://${server2.address.host}:${server2.port}/stream2');
+
+      final source = YouTubeAudioSource(
+        uri: uri1,
+        headers: {'User-Agent': 'TestUA'},
+        totalBytes: 1048576,
+        contentType: 'audio/mp4',
+        videoId: 'midstream_403_vid',
+        onReResolveUrl: ({bool fallbackNonOpus = false}) async {
+          reResolveCalls++;
+          return (url: uri2, headers: {'User-Agent': 'TestUA_Fresh'});
+        },
+      );
+
+      try {
+        final response = await source.request(0, 1048576);
+        final bytes = await response.stream.fold<List<int>>([], (prev, elem) => prev..addAll(elem));
+        expect(reResolveCalls, 1);
+        expect(bytes.length, 1048576);
+        expect(bytes.sublist(0, 5), [1, 1, 1, 1, 1]);
+        expect(bytes.sublist(bytes.length - 5), [2, 2, 2, 2, 2]);
+      } finally {
+        await server1.close();
+        await server2.close();
+      }
+    });
+
+    test('chunk ke-2 403 dengan re-resolve gagal melempar StreamChunkException dan maks 1x re-resolve', () async {
+      int reResolveCalls = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+
+      server.listen((HttpRequest request) {
+        final range = request.headers.value('Range') ?? '';
+        if (range.contains('bytes=0-')) {
+          request.response.statusCode = HttpStatus.partialContent;
+          request.response.headers.set('Content-Range', 'bytes 0-524287/1048576');
+          request.response.add(List.filled(512 * 1024, 1));
+          request.response.close();
+        } else {
+          // Chunk 2 selalu 403
+          request.response.statusCode = HttpStatus.forbidden;
+          request.response.close();
+        }
+      });
+
+      final uri = Uri.parse('http://${server.address.host}:${server.port}/stream');
+
+      final source = YouTubeAudioSource(
+        uri: uri,
+        headers: {'User-Agent': 'TestUA'},
+        totalBytes: 1048576,
+        contentType: 'audio/mp4',
+        videoId: 'midstream_403_fail_vid',
+        onReResolveUrl: ({bool fallbackNonOpus = false}) async {
+          reResolveCalls++;
+          return (url: uri, headers: {'User-Agent': 'TestUA'});
+        },
+      );
+
+      try {
+        final response = await source.request(0, 1048576);
+        await expectLater(
+          response.stream.fold<List<int>>([], (prev, elem) => prev..addAll(elem)),
+          throwsA(isA<StreamChunkException>().having((e) => e.statusCode, 'statusCode', 403)),
+        );
+        // Maksimal 1x re-resolve dipanggil dalam satu byteStream
+        expect(reResolveCalls, 1);
+      } finally {
+        await server.close();
+      }
+    });
+
+    test('proxy timeout: pembacaan body chunk yang menggantung melempar StreamChunkException timeout setelah 3x', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((HttpRequest request) {
+        // Balas headers partial content tapi jangan kirim byte apa pun (gantung)
+        request.response.statusCode = HttpStatus.partialContent;
+        request.response.headers.set('Content-Range', 'bytes 0-9/100');
+        // Jangan close response agar stream body menggantung
+      });
+
+      final uri = Uri.parse('http://${server.address.host}:${server.port}/stream');
+      final source = YouTubeAudioSource(
+        uri: uri,
+        headers: {'User-Agent': 'TestUA'},
+        totalBytes: 100,
+        contentType: 'audio/mp4',
+        videoId: 'stall_vid',
+        chunkTimeout: const Duration(milliseconds: 50), // Timeout cepat untuk unit test
+      );
+
+      try {
+        final response = await source.request(0, 10);
+        await expectLater(
+          response.stream.fold<List<int>>([], (prev, elem) => prev..addAll(elem)),
+          throwsA(isA<StreamChunkException>().having((e) => e.message.toLowerCase(), 'message', contains('timeout'))),
+        );
+      } finally {
+        await server.close(force: true);
+      }
+    });
+
+    test('totalBytes dikoreksi dari header Content-Range respons 206 pertama', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((HttpRequest request) {
+        final range = request.headers.value('Range') ?? '';
+        request.response.statusCode = HttpStatus.partialContent;
+        if (range.contains('bytes=0-')) {
+          // Server mengembalikan total 1048576 padahal manifest mengklaim 100000
+          request.response.headers.set('Content-Range', 'bytes 0-524287/1048576');
+          request.response.add(List.filled(512 * 1024, 7));
+        } else {
+          request.response.headers.set('Content-Range', 'bytes 524288-1048575/1048576');
+          request.response.add(List.filled(512 * 1024, 8));
+        }
+        request.response.close();
+      });
+
+      final uri = Uri.parse('http://${server.address.host}:${server.port}/stream');
+      final source = YouTubeAudioSource(
+        uri: uri,
+        headers: {'User-Agent': 'TestUA'},
+        totalBytes: 100000, // Manifest salah (lebih kecil)
+        contentType: 'audio/mp4',
+        videoId: 'correct_total_vid',
+      );
+
+      try {
+        // Panggil tanpa end agar stream dibatasi oleh totalBytes/effectiveEnd
+        final response = await source.request(0);
+        final bytes = await response.stream.fold<List<int>>([], (prev, elem) => prev..addAll(elem));
+        // Stream tidak berhenti di 100000, melainkan lanjut mengambil seluruh 1048576 bytes
+        expect(bytes.length, 1048576);
+      } finally {
+        await server.close();
+      }
+    });
+
+    test('respons 200: 10 chunk berturut-turut semuanya berhasil tanpa error koneksi', () async {
+      int requestCount = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      const chunkSize = 512 * 1024;
+      const totalChunks = 10;
+      final totalSize = totalChunks * chunkSize;
+      final fullData = List.filled(totalSize, 9);
+
+      server.listen((HttpRequest request) {
+        requestCount++;
+        // CDN salah membalas 200 OK untuk setiap chunk (mengirim seluruh data file)
+        request.response.statusCode = HttpStatus.ok;
+        request.response.headers.set('Content-Type', 'audio/mp4');
+        request.response.add(fullData);
+        request.response.close();
+      });
+
+      final uri = Uri.parse('http://${server.address.host}:${server.port}/stream');
+      final source = YouTubeAudioSource(
+        uri: uri,
+        headers: {'User-Agent': 'TestUA'},
+        totalBytes: totalSize,
+        contentType: 'audio/mp4',
+        videoId: 'ten_chunks_200_vid',
+      );
+
+      try {
+        final response = await source.request(0, totalSize);
+        final bytes = await response.stream.fold<List<int>>([], (prev, elem) => prev..addAll(elem));
+        expect(requestCount, totalChunks);
+        expect(bytes.length, totalSize);
+      } finally {
+        await server.close();
+      }
+    });
   });
 }

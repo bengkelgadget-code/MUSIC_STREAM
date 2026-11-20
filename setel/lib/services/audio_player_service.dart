@@ -163,6 +163,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   int _recoveryAttempts = 0;
   int _consecutiveFailures = 0;
   bool _hasSuccessfulPlayThisSession = false;
+  int? _activeStreamTotalBytes;
 
   bool _isSourceError(Object error) {
     Object current = error;
@@ -450,6 +451,31 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
   Future<void> _handleTrackEnded() async {
     try {
+      final song = _currentSong;
+      final pos = _player.position;
+      final dur = _player.duration ??
+          (song != null && song.durationMs > 0
+              ? Duration(milliseconds: song.durationMs)
+              : Duration.zero);
+      final completedEarly = dur > Duration.zero && pos < dur * 0.9;
+      final totalBytes =
+          _activeStreamTotalBytes ?? (song != null ? song.durationMs : 0);
+
+      debugPrint(
+          '[AudioPlayerService] TRACK-END videoId=${song?.videoId} position=$pos duration=$dur totalBytes=$totalBytes queueLen=${_queue.length} completedEarly=$completedEarly');
+
+      if (completedEarly && song != null) {
+        debugPrint(
+            '[AudioPlayerService] Lagu "${song.title}" (${song.videoId}) selesai prematur pada $pos dari total $dur. Menangani sebagai kegagalan stream...');
+        final earlyException = StreamChunkException(
+          videoId: song.videoId,
+          range: 'completed-early',
+          message: 'Stream audio berakhir prematur ($pos / $dur)',
+        );
+        await _handlePlaybackError(earlyException, StackTrace.current);
+        return;
+      }
+
       debugPrint(
           '[AudioPlayerService] track ended: videoId: ${_currentSong?.videoId}, title: ${_currentSong?.title}, position: ${_player.position}, duration: ${_player.duration}');
       saveCurrentPosition(resetToZero: true);
@@ -630,6 +656,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
       if (cachedFile != null) {
         debugPrint('Memutar dari cache lokal offline: ${cachedFile.path}');
+        _activeStreamTotalBytes = cachedFile.lengthSync();
         await _player.setFilePath(cachedFile.path, initialPosition: initPos);
         await _player.play();
       } else {
@@ -655,6 +682,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
         var stream = await _youTubeService.resolveStreamUrl(song.videoId);
         activeStream = stream;
+        _activeStreamTotalBytes = stream.totalBytes;
 
         YouTubeAudioSource createAudioSource(AudioStreamResult streamInfo) {
           return YouTubeAudioSource(
@@ -707,6 +735,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
                     clientStartIndex: 0,
                   );
                   activeStream = stream;
+                  _activeStreamTotalBytes = stream.totalBytes;
                   audioSource = createAudioSource(stream);
                   continue;
                 } catch (fallbackErr) {
@@ -723,6 +752,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
                     clientStartIndex: 0,
                   );
                   activeStream = stream;
+                  _activeStreamTotalBytes = stream.totalBytes;
                   audioSource = createAudioSource(stream);
                   continue;
                 } catch (retryErr) {

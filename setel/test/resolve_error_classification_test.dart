@@ -85,8 +85,34 @@ class TrackingYouTubeService implements YouTubeService {
 class MockAudioPlayer extends AudioPlayer {
   int setAudioSourceCallCount = 0;
   int playCallCount = 0;
+  int pauseCallCount = 0;
   int stopCallCount = 0;
+  Duration _mockPosition = Duration.zero;
+  Duration? _mockDuration;
+  final _mockProcessingStateController = StreamController<ProcessingState>.broadcast();
   Future<Duration?> Function(AudioSource source)? onSetAudioSource;
+
+  @override
+  Duration get position => _mockPosition;
+
+  @override
+  Duration? get duration => _mockDuration;
+
+  @override
+  Stream<ProcessingState> get processingStateStream =>
+      _mockProcessingStateController.stream;
+
+  void emitProcessingState(ProcessingState state) {
+    _mockProcessingStateController.add(state);
+  }
+
+  void setMockPosition(Duration pos) {
+    _mockPosition = pos;
+  }
+
+  void setMockDuration(Duration? dur) {
+    _mockDuration = dur;
+  }
 
   @override
   Future<Duration?> setAudioSource(
@@ -105,6 +131,11 @@ class MockAudioPlayer extends AudioPlayer {
   @override
   Future<void> play() async {
     playCallCount++;
+  }
+
+  @override
+  Future<void> pause() async {
+    pauseCallCount++;
   }
 
   @override
@@ -727,6 +758,106 @@ void main() {
       expect(opusResolveCount, 1);
       expect(nonOpusResolveCount, 1);
       expect(setSourceCount, 2);
+      expect(lastState?.playbackError, isNull);
+    });
+
+    test('completed saat position 5 detik dari 240 detik memicu jalur kegagalan (auto-skip jika resume gagal)', () async {
+      int earlyResolveCalls = 0;
+      final mockAudioPlayer = MockAudioPlayer();
+      final youTubeService = TrackingYouTubeService(
+        onResolve: (id, start) async {
+          if (id == 'early_1') {
+            earlyResolveCalls++;
+            if (earlyResolveCalls > 1) {
+              // Gagalkan auto-resume agar masuk ke auto-skip
+              throw Exception('Gagal auto-resume');
+            }
+          }
+          return AudioStreamResult(
+            url: Uri.parse('https://example.com/audio.m4a'),
+            headers: {},
+          );
+        },
+      );
+      final player = AudioPlayerServiceImpl(
+        player: mockAudioPlayer,
+        audioHandler: SetelAudioHandler(),
+        youTubeService: youTubeService,
+        connectivity: FakeConnectivity([ConnectivityResult.wifi]),
+      );
+
+      PlayerState? lastState;
+      final sub = player.playerState.listen((s) => lastState = s);
+      addTearDown(sub.cancel);
+
+      const song1 = Song(
+        videoId: 'early_1',
+        title: 'Early Song 1',
+        artist: 'Artist',
+        durationMs: 240000,
+        thumbnailUrl: '',
+      );
+      const song2 = Song(
+        videoId: 'song_2',
+        title: 'Song 2',
+        artist: 'Artist',
+        durationMs: 240000,
+        thumbnailUrl: '',
+      );
+
+      await player.playQueue([song1, song2]);
+
+      // Set position 5s dari 240s (< 90%)
+      mockAudioPlayer.setMockPosition(const Duration(seconds: 5));
+      mockAudioPlayer.setMockDuration(const Duration(seconds: 240));
+
+      // Simulasikan completed prematur
+      mockAudioPlayer.emitProcessingState(ProcessingState.completed);
+      await pumpEventQueue();
+      await Future.delayed(const Duration(milliseconds: 400));
+
+      // Karena auto-resume gagal, harus auto-skip ke song2 (BUKAN pause diam-diam di song1)
+      expect(lastState?.currentSong?.videoId, 'song_2');
+    });
+
+    test('completed saat position 238 detik dari 240 detik berperilaku normal (lagu habis)', () async {
+      final mockAudioPlayer = MockAudioPlayer();
+      final youTubeService = TrackingYouTubeService(
+        onResolve: (id, start) async => AudioStreamResult(
+          url: Uri.parse('https://example.com/audio.m4a'),
+          headers: {},
+        ),
+      );
+      final player = AudioPlayerServiceImpl(
+        player: mockAudioPlayer,
+        audioHandler: SetelAudioHandler(),
+        youTubeService: youTubeService,
+        connectivity: FakeConnectivity([ConnectivityResult.wifi]),
+      );
+
+      PlayerState? lastState;
+      final sub = player.playerState.listen((s) => lastState = s);
+      addTearDown(sub.cancel);
+
+      const song1 = Song(
+        videoId: 'normal_end_1',
+        title: 'Normal End Song',
+        artist: 'Artist',
+        durationMs: 240000,
+        thumbnailUrl: '',
+      );
+
+      await player.playSong(song1);
+
+      // Set position 238s dari 240s (>= 90%)
+      mockAudioPlayer.setMockPosition(const Duration(seconds: 238));
+      mockAudioPlayer.setMockDuration(const Duration(seconds: 240));
+
+      mockAudioPlayer.emitProcessingState(ProcessingState.completed);
+      await pumpEventQueue();
+
+      // Pause normal karena lagu memang habis
+      expect(mockAudioPlayer.pauseCallCount, greaterThanOrEqualTo(1));
       expect(lastState?.playbackError, isNull);
     });
   });

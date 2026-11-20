@@ -120,6 +120,19 @@ String classifyPlaybackError(
     return 'Server menolak akses stream (kemungkinan proteksi bot di jaringan ini). Coba ganti jaringan (WiFi lain / data seluler).';
   }
 
+  // STREAM BERAKHIR PREMATUR / COMPLETED EARLY
+  if (allErrorsCombined.contains('stream audio berakhir prematur') ||
+      allErrorsCombined.contains('berakhir prematur') ||
+      allErrorsCombined.contains('completed-early')) {
+    String msg =
+        'Pemutaran terhenti prematur: koneksi stream audio terputus. Coba putar lagi atau ganti jaringan.';
+    if (hasSuccessfulPlayThisSession) {
+      msg +=
+          ' Lagu lain di sesi ini berhasil diputar — kemungkinan videonya yang bermasalah, coba lagu lain.';
+    }
+    return msg;
+  }
+
   // SOURCE ERROR (ExoPlayer TYPE_SOURCE / stream load failure / googlevideo kedaluwarsa)
   if ((root is PlatformException && root.code == '0') ||
       (error is PlatformException && error.code == '0') ||

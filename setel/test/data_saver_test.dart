@@ -394,5 +394,62 @@ void main() {
 
       expect(await cacheService.isCached(song), isTrue);
     });
+
+    test('1F: Cache verification - panjang tidak cocok menghapus cache, cocok dikembalikan, tanpa meta tetap dipercaya', () async {
+      final cacheDir = Directory('${tempDir.path}/setel_cache');
+      if (!cacheDir.existsSync()) cacheDir.createSync(recursive: true);
+      final cacheService = CacheServiceImpl(cacheDirectory: cacheDir);
+
+      // Kasus 1: Panjang != totalBytes di .meta (> 1024 selisih)
+      const corruptSong = Song(
+        videoId: 'corrupt_song',
+        title: 'Corrupt Song',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+      final corruptFile = File('${cacheDir.path}/${corruptSong.videoId}.m4a');
+      await corruptFile.writeAsBytes(List.filled(5000, 1));
+      final corruptMeta = File('${cacheDir.path}/${corruptSong.videoId}.meta');
+      await corruptMeta.writeAsString('100000'); // Diharapkan 100KB, ada 5KB
+
+      // getCached harus mengembalikan null dan menghapus file corrupt + meta
+      final resultCorrupt = await cacheService.getCached(corruptSong);
+      expect(resultCorrupt, isNull);
+      expect(corruptFile.existsSync(), isFalse);
+      expect(corruptMeta.existsSync(), isFalse);
+
+      // Kasus 2: Panjang cocok dengan .meta (selisih <= 1024)
+      const validSong = Song(
+        videoId: 'valid_song',
+        title: 'Valid Song',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+      final validFile = File('${cacheDir.path}/${validSong.videoId}.m4a');
+      await validFile.writeAsBytes(List.filled(10000, 1));
+      final validMeta = File('${cacheDir.path}/${validSong.videoId}.meta');
+      await validMeta.writeAsString('10000');
+
+      final resultValid = await cacheService.getCached(validSong);
+      expect(resultValid, isNotNull);
+      expect(resultValid!.path, validFile.path);
+
+      // Kasus 3: Cache lama tanpa .meta -> tetap dipercaya
+      const legacySong = Song(
+        videoId: 'legacy_song',
+        title: 'Legacy Song',
+        artist: 'Artist',
+        durationMs: 180000,
+        thumbnailUrl: '',
+      );
+      final legacyFile = File('${cacheDir.path}/${legacySong.videoId}.m4a');
+      await legacyFile.writeAsBytes(List.filled(8000, 1));
+
+      final resultLegacy = await cacheService.getCached(legacySong);
+      expect(resultLegacy, isNotNull);
+      expect(resultLegacy!.path, legacyFile.path);
+    });
   });
 }
