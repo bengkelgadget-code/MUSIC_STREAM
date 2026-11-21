@@ -187,8 +187,11 @@ Future<SetelAudioHandler> initAudioService() async {
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.bengkel.setel.channel.audio',
       androidNotificationChannelName: 'Setel Audio Playback',
-      androidNotificationOngoing: true,
-      androidStopForegroundOnPause: true,
+      // audio_service asserts (!androidNotificationOngoing || androidStopForegroundOnPause).
+      // Dengan androidStopForegroundOnPause: false, foreground service tetap hidup saat pause,
+      // sehingga notifikasi otomatis ongoing oleh sistem Android.
+      androidNotificationOngoing: false,
+      androidStopForegroundOnPause: false,
       androidShowNotificationBadge: true,
     ),
   );

@@ -85,6 +85,9 @@ class DummyAudioPlayerService implements AudioPlayerService {
 
   @override
   void clearPlaybackError() {}
+
+  @override
+  String? get playbackError => null;
 }
 
 void main() {

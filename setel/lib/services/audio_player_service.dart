@@ -120,6 +120,7 @@ abstract class AudioPlayerService {
   Future<void> addToQueueNext(Song song); // "play next"
   void saveCurrentPosition({bool resetToZero = false});
   void clearPlaybackError();
+  String? get playbackError;
 
   Stream<PlayerState>
       get playerState; // isPlaying, position, currentSong, queue, shuffle, repeatMode
@@ -165,6 +166,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   int _consecutiveFailures = 0;
   bool _hasSuccessfulPlayThisSession = false;
   int? _activeStreamTotalBytes;
+  bool _activeStreamIsOpus = false;
+  bool _pausedByUser = false;
 
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
   bool _pausedByFocusInterruption = false;
@@ -187,6 +190,49 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     return errStr.contains('source error') ||
         errStr.contains('streamchunkexception') ||
         (error is PlatformException && error.code == '0');
+  }
+
+  bool _isSeekBeyondEof(Object error) {
+    if (error is SeekBeyondEofException) return true;
+    if (YouTubeAudioSource.lastChunkException is SeekBeyondEofException) return true;
+    final lastChunk = YouTubeAudioSource.lastChunkError;
+    if (lastChunk != null && lastChunk.statusCode == 416) {
+      if (YouTubeAudioSource.lastChunkException?.message.contains('seek-beyond-eof') == true) {
+        return true;
+      }
+    }
+    final errStr = error.toString().toLowerCase();
+    if (errStr.contains('seek-beyond-eof') || errStr.contains('seekbeyondeofexception')) {
+      return true;
+    }
+    return false;
+  }
+
+  YouTubeAudioSource _createAudioSource(Song song, AudioStreamResult streamInfo) {
+    return YouTubeAudioSource(
+      uri: streamInfo.url,
+      headers: streamInfo.headers,
+      totalBytes: streamInfo.totalBytes,
+      contentType: streamInfo.contentType,
+      tag: song,
+      videoId: song.videoId,
+      clientName: streamInfo.clientName,
+      isOpus: streamInfo.isOpus,
+      onReResolveUrl: ({bool fallbackNonOpus = false}) async {
+        if (fallbackNonOpus) {
+          final nonOpus = await _youTubeService.resolveNonOpusStream(
+            song.videoId,
+            clientStartIndex: 0,
+          );
+          return (url: nonOpus.url, headers: nonOpus.headers, totalBytes: nonOpus.totalBytes);
+        }
+        final reStream = await _youTubeService.resolveStreamUrl(
+          song.videoId,
+          clientStartIndex: 0,
+        );
+        return (url: reStream.url, headers: reStream.headers, totalBytes: reStream.totalBytes);
+      },
+    );
   }
 
   int _findChapterIndex(Duration pos, List<SongChapter> chapters) {
@@ -238,15 +284,16 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
   void _listenToInterruptionStream(Stream<AudioInterruptionEvent> stream) {
     _interruptionSub?.cancel();
-    _interruptionSub = stream.listen((event) {
+    _interruptionSub = stream.listen((event) async {
       if (event.begin) {
-        debugPrint('[AudioPlayerService] FOCUS: begin type=${event.type}');
+        debugPrint(
+            '[AudioPlayerService] FOCUS: begin type=${event.type} pausedByUser=$_pausedByUser');
         switch (event.type) {
           case AudioInterruptionType.duck:
             break;
           case AudioInterruptionType.pause:
           case AudioInterruptionType.unknown:
-            if (_player.playing) {
+            if (!_pausedByUser) {
               _pausedByFocusInterruption = true;
               saveCurrentPosition();
               debugPrint(
@@ -255,17 +302,95 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
             break;
         }
       } else {
-        debugPrint('[AudioPlayerService] FOCUS: end');
+        debugPrint(
+            '[AudioPlayerService] FOCUS: end type=${event.type} pausedByFocus=$_pausedByFocusInterruption pausedByUser=$_pausedByUser');
         switch (event.type) {
           case AudioInterruptionType.duck:
             break;
           case AudioInterruptionType.pause:
           case AudioInterruptionType.unknown:
-            if (_pausedByFocusInterruption) {
+            if (_pausedByFocusInterruption && !_pausedByUser) {
               _pausedByFocusInterruption = false;
               debugPrint(
-                  '[AudioPlayerService] FOCUS: auto-resuming playback dari posisi terakhir: ${_player.position}');
-              _player.play();
+                  '[AudioPlayerService] FOCUS: end, resume attempt dari posisi: ${_player.position}');
+              bool resumeVerified = false;
+              try {
+                await _player.play();
+                await Future.delayed(const Duration(milliseconds: 300));
+                if (_player.playing) {
+                  resumeVerified = true;
+                }
+              } catch (e) {
+                debugPrint('[AudioPlayerService] FOCUS: play() throw: $e');
+              }
+              debugPrint(
+                  '[AudioPlayerService] FOCUS: resume verified playing=$resumeVerified');
+
+              if (!resumeVerified) {
+                if (_isRecoveringPlayback) {
+                  debugPrint(
+                      '[AudioPlayerService] RECOVERY-SKIP: FOCUS recovery dilewati karena recovery lain sedang berjalan');
+                  return;
+                }
+                final song = _currentSong;
+                if (song == null) return;
+                final targetPos = _player.position;
+                _isRecoveringPlayback = true;
+                debugPrint(
+                    '[AudioPlayerService] FOCUS: recovery dimulai untuk videoId: ${song.videoId} pada posisi: $targetPos');
+                try {
+                  var stream = await _youTubeService.resolveStreamUrl(
+                    song.videoId,
+                    clientStartIndex: 0,
+                  );
+                  var audioSource = _createAudioSource(song, stream);
+                  int attempt = 0;
+                  while (true) {
+                    try {
+                      await _player.setAudioSource(audioSource, initialPosition: targetPos);
+                      await _player.play();
+                      _activeStreamIsOpus = stream.isOpus;
+                      _activeStreamTotalBytes = stream.totalBytes;
+                      clearPlaybackError();
+                      debugPrint(
+                          '[AudioPlayerService] FOCUS: recovery berhasil pada posisi $targetPos');
+                      break;
+                    } catch (loadErr) {
+                      attempt++;
+                      if (attempt >= 2) rethrow;
+                      if (stream.isOpus) {
+                        debugPrint(
+                            '[AudioPlayerService] FOCUS: recovery Opus gagal ($loadErr), fallback 1x Non-Opus (AAC)...');
+                        stream = await _youTubeService.resolveNonOpusStream(
+                          song.videoId,
+                          clientStartIndex: 0,
+                        );
+                        _activeStreamIsOpus = stream.isOpus;
+                        _activeStreamTotalBytes = stream.totalBytes;
+                        audioSource = _createAudioSource(song, stream);
+                      } else {
+                        debugPrint(
+                            '[AudioPlayerService] FOCUS: recovery stream gagal ($loadErr), retry 1x URL segar...');
+                        stream = await _youTubeService.resolveStreamUrl(
+                          song.videoId,
+                          clientStartIndex: 0,
+                        );
+                        _activeStreamIsOpus = stream.isOpus;
+                        _activeStreamTotalBytes = stream.totalBytes;
+                        audioSource = _createAudioSource(song, stream);
+                      }
+                    }
+                  }
+                } catch (recoveryErr) {
+                  debugPrint(
+                      '[AudioPlayerService] FOCUS-RESUME-FAIL videoId: ${song.videoId} error: $recoveryErr');
+                  _playbackError =
+                      'Pemutaran terhenti oleh notifikasi lain dan tidak bisa dilanjutkan otomatis. Tekan play untuk mencoba lagi.';
+                  _emitState();
+                } finally {
+                  _isRecoveringPlayback = false;
+                }
+              }
             }
             break;
         }
@@ -326,9 +451,15 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   }
 
   void _connectAudioHandler() {
-    _audioHandler.onPlayCallback = () => _player.play();
+    _audioHandler.onPlayCallback = () {
+      _pausedByUser = false;
+      _pausedByFocusInterruption = false;
+      clearPlaybackError();
+      _player.play();
+    };
     _audioHandler.onPauseCallback = () {
       debugPrint('[AudioPlayerService] PAUSE-DARI-NOTIFIKASI');
+      _pausedByUser = true;
       _pausedByFocusInterruption = false;
       saveCurrentPosition();
       _player.pause();
@@ -338,6 +469,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     _audioHandler.onSeekCallback = (position) => seek(position);
     _audioHandler.onStopCallback = () async {
       debugPrint('[AudioPlayerService] STOP-DARI-NOTIFIKASI');
+      _pausedByUser = true;
       _pausedByFocusInterruption = false;
       saveCurrentPosition();
       if (_currentlyCachingSong != null) {
@@ -383,13 +515,21 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     _emitState();
   }
 
+  @override
+  String? get playbackError => _playbackError;
+
   Future<void> _handlePlaybackError(Object error, [StackTrace? stackTrace]) async {
     final song = _currentSong;
     final currentPos = _player.position;
     debugPrint(
         '[AudioPlayerService] track error: videoId: ${song?.videoId}, title: ${song?.title}, position: $currentPos, error: $error\n$stackTrace');
 
-    if (song == null || _isRecoveringPlayback) return;
+    if (song == null) return;
+    if (_isRecoveringPlayback) {
+      debugPrint(
+          '[AudioPlayerService] RECOVERY-SKIP: _handlePlaybackError dilewati karena recovery lain sedang berjalan');
+      return;
+    }
 
     if (_recoveryAttempts < 1) {
       _recoveryAttempts++;
@@ -397,44 +537,52 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       debugPrint(
           '[AudioPlayerService] Mencoba auto-resume pemutaran untuk videoId: ${song.videoId} pada posisi $currentPos...');
       try {
-        final freshStream = await _youTubeService.resolveStreamUrl(
+        var stream = await _youTubeService.resolveStreamUrl(
           song.videoId,
           clientStartIndex: 0,
         );
-        final audioSource = YouTubeAudioSource(
-          uri: freshStream.url,
-          headers: freshStream.headers,
-          totalBytes: freshStream.totalBytes,
-          contentType: freshStream.contentType,
-          tag: song,
-          videoId: song.videoId,
-          clientName: freshStream.clientName,
-          isOpus: freshStream.isOpus,
-          onReResolveUrl: ({bool fallbackNonOpus = false}) async {
-            if (fallbackNonOpus) {
-              final nonOpus = await _youTubeService.resolveNonOpusStream(
+        var audioSource = _createAudioSource(song, stream);
+        int attempt = 0;
+        while (true) {
+          try {
+            await _player.setAudioSource(audioSource, initialPosition: currentPos);
+            await _player.play();
+            _activeStreamIsOpus = stream.isOpus;
+            _activeStreamTotalBytes = stream.totalBytes;
+            clearPlaybackError();
+            debugPrint(
+                '[AudioPlayerService] Auto-resume berhasil untuk videoId: ${song.videoId} pada posisi $currentPos');
+            return;
+          } catch (loadErr) {
+            attempt++;
+            if (attempt >= 2) rethrow;
+            if (stream.isOpus) {
+              debugPrint(
+                  '[AudioPlayerService] Auto-resume Opus gagal ($loadErr), fallback 1x Non-Opus (AAC)...');
+              stream = await _youTubeService.resolveNonOpusStream(
                 song.videoId,
                 clientStartIndex: 0,
               );
-              return (url: nonOpus.url, headers: nonOpus.headers, totalBytes: nonOpus.totalBytes);
+              _activeStreamIsOpus = stream.isOpus;
+              _activeStreamTotalBytes = stream.totalBytes;
+              audioSource = _createAudioSource(song, stream);
+            } else {
+              debugPrint(
+                  '[AudioPlayerService] Auto-resume stream gagal ($loadErr), retry 1x URL segar...');
+              stream = await _youTubeService.resolveStreamUrl(
+                song.videoId,
+                clientStartIndex: 0,
+              );
+              _activeStreamIsOpus = stream.isOpus;
+              _activeStreamTotalBytes = stream.totalBytes;
+              audioSource = _createAudioSource(song, stream);
             }
-            final reStream = await _youTubeService.resolveStreamUrl(
-              song.videoId,
-              clientStartIndex: 0,
-            );
-            return (url: reStream.url, headers: reStream.headers, totalBytes: reStream.totalBytes);
-          },
-        );
-        await _player.setAudioSource(audioSource, initialPosition: currentPos);
-        await _player.play();
-        _isRecoveringPlayback = false;
-        clearPlaybackError();
-        debugPrint(
-            '[AudioPlayerService] Auto-resume berhasil untuk videoId: ${song.videoId} pada posisi $currentPos');
-        return;
+          }
+        }
       } catch (recoveryErr) {
         debugPrint(
             '[AudioPlayerService] Auto-resume gagal untuk videoId: ${song.videoId}: $recoveryErr');
+      } finally {
         _isRecoveringPlayback = false;
       }
     }
@@ -518,7 +666,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     _stateController.add(state);
   }
 
-  Future<void> _handleTrackEnded() async {
+  Future<void> _handleTrackEnded({bool fromUserSeekEnd = false}) async {
     try {
       final song = _currentSong;
       final pos = _player.position;
@@ -526,7 +674,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
           (song != null && song.durationMs > 0
               ? Duration(milliseconds: song.durationMs)
               : Duration.zero);
-      final completedEarly = dur > Duration.zero && pos < dur * 0.9;
+      final completedEarly =
+          !fromUserSeekEnd && dur > Duration.zero && pos < dur * 0.9;
       final totalBytes =
           _activeStreamTotalBytes ?? (song != null ? song.durationMs : 0);
 
@@ -663,6 +812,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     _currentSong = song;
     _playbackError = null;
     _recoveryAttempts = 0;
+    _pausedByUser = false;
+    _pausedByFocusInterruption = false;
     YouTubeAudioSource.resetLastChunkError();
 
     // Reset chapter state untuk lagu baru
@@ -727,6 +878,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
       if (cachedFile != null) {
         debugPrint('Memutar dari cache lokal offline: ${cachedFile.path}');
+        _activeStreamIsOpus = false;
         _activeStreamTotalBytes = cachedFile.lengthSync();
         await _player.setFilePath(cachedFile.path, initialPosition: initPos);
         await _player.play();
@@ -753,34 +905,10 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
         var stream = await _youTubeService.resolveStreamUrl(song.videoId);
         activeStream = stream;
+        _activeStreamIsOpus = stream.isOpus;
         _activeStreamTotalBytes = stream.totalBytes;
 
-        YouTubeAudioSource createAudioSource(AudioStreamResult streamInfo) {
-          return YouTubeAudioSource(
-            uri: streamInfo.url,
-            headers: streamInfo.headers,
-            totalBytes: streamInfo.totalBytes,
-            contentType: streamInfo.contentType,
-            tag: song,
-            videoId: song.videoId,
-            clientName: streamInfo.clientName,
-            isOpus: streamInfo.isOpus,
-            onReResolveUrl: ({bool fallbackNonOpus = false}) async {
-              if (fallbackNonOpus) {
-                final nonOpus = await _youTubeService.resolveNonOpusStream(
-                  song.videoId,
-                  clientStartIndex: 0,
-                );
-                return (url: nonOpus.url, headers: nonOpus.headers, totalBytes: nonOpus.totalBytes);
-              }
-              final reStream =
-                  await _youTubeService.resolveStreamUrl(song.videoId, clientStartIndex: 0);
-              return (url: reStream.url, headers: reStream.headers, totalBytes: reStream.totalBytes);
-            },
-          );
-        }
-
-        var audioSource = createAudioSource(stream);
+        var audioSource = _createAudioSource(song, stream);
 
         int loadAttempt = 0;
         while (true) {
@@ -806,8 +934,9 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
                     clientStartIndex: 0,
                   );
                   activeStream = stream;
+                  _activeStreamIsOpus = stream.isOpus;
                   _activeStreamTotalBytes = stream.totalBytes;
-                  audioSource = createAudioSource(stream);
+                  audioSource = _createAudioSource(song, stream);
                   continue;
                 } catch (fallbackErr) {
                   debugPrint(
@@ -823,8 +952,9 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
                     clientStartIndex: 0,
                   );
                   activeStream = stream;
+                  _activeStreamIsOpus = stream.isOpus;
                   _activeStreamTotalBytes = stream.totalBytes;
-                  audioSource = createAudioSource(stream);
+                  audioSource = _createAudioSource(song, stream);
                   continue;
                 } catch (retryErr) {
                   debugPrint(
@@ -970,10 +1100,13 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   @override
   Future<void> togglePlayPause() async {
     _pausedByFocusInterruption = false;
+    clearPlaybackError();
     if (_player.playing) {
+      _pausedByUser = true;
       saveCurrentPosition();
       await _player.pause();
     } else {
+      _pausedByUser = false;
       if (_currentSong != null) {
         await _player.play();
       } else if (_queue.isNotEmpty) {
@@ -986,6 +1119,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   @override
   Future<void> next({bool fromAutoSkip = false}) async {
     if (_queue.isEmpty) return;
+    _pausedByUser = false;
+    _pausedByFocusInterruption = false;
     saveCurrentPosition();
 
     if (_repeatMode == RepeatMode.one) {
@@ -1036,6 +1171,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   @override
   Future<void> previous() async {
     if (_queue.isEmpty) return;
+    _pausedByUser = false;
+    _pausedByFocusInterruption = false;
     saveCurrentPosition();
 
     // Bila ada chapters:
@@ -1068,66 +1205,195 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
   @override
   Future<void> seek(Duration position) async {
+    final song = _currentSong;
+    final dur = _player.duration ??
+        (song != null && song.durationMs > 0
+            ? Duration(milliseconds: song.durationMs)
+            : null);
+    final posFrom = _player.position;
+
+    debugPrint(
+        '[AudioPlayerService] SEEK from=$posFrom to=$position duration=$dur videoId=${song?.videoId}');
+
     try {
       await _player.seek(position);
+      debugPrint('[AudioPlayerService] SEEK-OK position=$position');
       clearPlaybackError();
       if (_chapters.isNotEmpty) {
         _chapterIndex = _findChapterIndex(position, _chapters);
         _emitState();
       }
+      return;
     } catch (e) {
-      debugPrint(
-          'Error saat seek: $e. Mencoba memulihkan pemutaran pada posisi $position...');
-      if (_currentSong != null) {
+      debugPrint('[AudioPlayerService] SEEK-FAIL stage=player-seek error=$e');
+
+      // Bila posisi yang diminta memang sudah di 2 detik terakhir lagu -> perlakukan sebagai akhir lagu
+      if (dur != null &&
+          dur > const Duration(seconds: 2) &&
+          position >= dur - const Duration(seconds: 2) &&
+          position <= dur) {
+        debugPrint(
+            '[AudioPlayerService] SEEK gagal di 2 detik terakhir lagu (target=$position, dur=$dur), diperlakukan sebagai akhir lagu.');
+        clearPlaybackError();
+        await _handleTrackEnded(fromUserSeekEnd: true);
+        return;
+      }
+
+      // 1B: Periksa apakah error adalah seek-beyond-eof
+      if (_isSeekBeyondEof(e)) {
+        if (dur != null && dur > const Duration(seconds: 2)) {
+          final clampPos = dur - const Duration(seconds: 2);
+          if (position > dur) {
+            debugPrint(
+                '[AudioPlayerService] SEEK-BEYOND-EOF target $position > dur ($dur). Mencoba seek clamp ke $clampPos SEKALI...');
+            try {
+              await _player.seek(clampPos);
+              debugPrint('[AudioPlayerService] SEEK-OK setelah seek clamp ke $clampPos');
+              clearPlaybackError();
+              if (_chapters.isNotEmpty) {
+                _chapterIndex = _findChapterIndex(clampPos, _chapters);
+                _emitState();
+              }
+              return;
+            } catch (clampErr) {
+              debugPrint(
+                  '[AudioPlayerService] SEEK-BEYOND-EOF clamp ke $clampPos juga gagal: $clampErr. Memperlakukan sebagai akhir lagu.');
+              clearPlaybackError();
+              await _handleTrackEnded(fromUserSeekEnd: true);
+              return;
+            }
+          } else {
+            final targetEarlier = position > const Duration(seconds: 5)
+                ? position - const Duration(seconds: 5)
+                : Duration.zero;
+            debugPrint(
+                '[AudioPlayerService] SEEK-BEYOND-EOF mencoba seek ke $targetEarlier (5s lebih awal)...');
+            try {
+              await _player.seek(targetEarlier);
+              debugPrint('[AudioPlayerService] SEEK-OK setelah seek ke $targetEarlier');
+              clearPlaybackError();
+              if (_chapters.isNotEmpty) {
+                _chapterIndex = _findChapterIndex(targetEarlier, _chapters);
+                _emitState();
+              }
+              return;
+            } catch (earlierErr) {
+              debugPrint(
+                  '[AudioPlayerService] SEEK-BEYOND-EOF retry 5s lebih awal gagal: $earlierErr');
+            }
+          }
+        } else {
+          final targetEarlier = position > const Duration(seconds: 5)
+              ? position - const Duration(seconds: 5)
+              : Duration.zero;
+          debugPrint(
+              '[AudioPlayerService] SEEK-BEYOND-EOF durasi tidak diketahui, mencoba seek ke $targetEarlier (5s lebih awal)...');
+          try {
+            await _player.seek(targetEarlier);
+            debugPrint('[AudioPlayerService] SEEK-OK setelah seek ke $targetEarlier');
+            clearPlaybackError();
+            if (_chapters.isNotEmpty) {
+              _chapterIndex = _findChapterIndex(targetEarlier, _chapters);
+              _emitState();
+            }
+            return;
+          } catch (earlierErr) {
+            debugPrint(
+                '[AudioPlayerService] SEEK-BEYOND-EOF retry 5s lebih awal gagal: $earlierErr');
+          }
+        }
+      }
+
+      // 1C Guard: cek apakah recovery lain sedang berjalan
+      if (_isRecoveringPlayback) {
+        debugPrint(
+            '[AudioPlayerService] RECOVERY-SKIP: recovery seek menunggu recovery yang sedang berjalan...');
+        final waitDeadline = DateTime.now().add(const Duration(seconds: 5));
+        while (_isRecoveringPlayback && DateTime.now().isBefore(waitDeadline)) {
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+        if (_player.playing && _playbackError == null) {
+          debugPrint(
+              '[AudioPlayerService] RECOVERY-SKIP: pemutaran sudah pulih setelah menunggu recovery lain.');
+          return;
+        }
+      }
+
+      if (song == null) {
+        throw AppException('Gagal mempercepat lagu: $e', e);
+      }
+
+      _isRecoveringPlayback = true;
+      try {
+        int attempt = 1;
+        AudioStreamResult? stream;
         try {
-          final freshStream = await _youTubeService.resolveStreamUrl(
-            _currentSong!.videoId,
+          stream = await _youTubeService.resolveStreamUrl(
+            song.videoId,
             clientStartIndex: 0,
           );
-          final audioSource = YouTubeAudioSource(
-            uri: freshStream.url,
-            headers: freshStream.headers,
-            totalBytes: freshStream.totalBytes,
-            contentType: freshStream.contentType,
-            tag: _currentSong,
-            videoId: _currentSong!.videoId,
-            clientName: freshStream.clientName,
-            isOpus: freshStream.isOpus,
-            onReResolveUrl: ({bool fallbackNonOpus = false}) async {
-              if (fallbackNonOpus) {
-                final nonOpus = await _youTubeService.resolveNonOpusStream(
-                  _currentSong!.videoId,
-                  clientStartIndex: 0,
-                );
-                return (url: nonOpus.url, headers: nonOpus.headers, totalBytes: nonOpus.totalBytes);
-              }
-              final reStream = await _youTubeService.resolveStreamUrl(
-                _currentSong!.videoId,
-                clientStartIndex: 0,
-              );
-              return (url: reStream.url, headers: reStream.headers, totalBytes: reStream.totalBytes);
-            },
-          );
+          final audioSource = _createAudioSource(song, stream);
           await _player.setAudioSource(audioSource, initialPosition: position);
           await _player.play();
+          _activeStreamIsOpus = stream.isOpus;
+          _activeStreamTotalBytes = stream.totalBytes;
+          debugPrint('[AudioPlayerService] SEEK-RECOVERY attempt=$attempt result=ok');
           clearPlaybackError();
           if (_chapters.isNotEmpty) {
             _chapterIndex = _findChapterIndex(position, _chapters);
             _emitState();
           }
-        } catch (recoverErr) {
-          final classified = classifyPlaybackError(
-            recoverErr,
-            songTitle: _currentSong?.title,
-            lastChunkError: YouTubeAudioSource.lastChunkError,
-            hasSuccessfulPlayThisSession: _hasSuccessfulPlayThisSession,
-          );
-          _playbackError = classified;
-          _emitState();
-          throw AppException('Gagal mempercepat lagu: $classified', recoverErr);
+          return;
+        } catch (recoverAttempt1Err) {
+          debugPrint(
+              '[AudioPlayerService] SEEK-RECOVERY attempt=$attempt result=fail error=$recoverAttempt1Err');
+          attempt = 2;
+          try {
+            final wasOpus = stream?.isOpus ?? _activeStreamIsOpus;
+            AudioStreamResult fallbackStream;
+            if (wasOpus) {
+              debugPrint(
+                  '[AudioPlayerService] SEEK-RECOVERY attempt 1 Opus gagal, fallback 1x Non-Opus (AAC)...');
+              fallbackStream = await _youTubeService.resolveNonOpusStream(
+                song.videoId,
+                clientStartIndex: 0,
+              );
+            } else {
+              debugPrint(
+                  '[AudioPlayerService] SEEK-RECOVERY attempt 1 non-Opus gagal, retry 1x URL segar...');
+              fallbackStream = await _youTubeService.resolveStreamUrl(
+                song.videoId,
+                clientStartIndex: 0,
+              );
+            }
+            final fallbackSource = _createAudioSource(song, fallbackStream);
+            await _player.setAudioSource(fallbackSource, initialPosition: position);
+            await _player.play();
+            _activeStreamIsOpus = fallbackStream.isOpus;
+            _activeStreamTotalBytes = fallbackStream.totalBytes;
+            debugPrint('[AudioPlayerService] SEEK-RECOVERY attempt=$attempt result=ok');
+            clearPlaybackError();
+            if (_chapters.isNotEmpty) {
+              _chapterIndex = _findChapterIndex(position, _chapters);
+              _emitState();
+            }
+            return;
+          } catch (recoverAttempt2Err) {
+            debugPrint(
+                '[AudioPlayerService] SEEK-RECOVERY attempt=$attempt result=fail error=$recoverAttempt2Err');
+            final classified = classifyPlaybackError(
+              recoverAttempt2Err,
+              songTitle: song.title,
+              lastChunkError: YouTubeAudioSource.lastChunkError,
+              hasSuccessfulPlayThisSession: _hasSuccessfulPlayThisSession,
+            );
+            _playbackError = classified;
+            _emitState();
+            throw AppException('Gagal mempercepat lagu: $classified', recoverAttempt2Err);
+          }
         }
-      } else {
-        throw AppException('Gagal mempercepat lagu: $e', e);
+      } finally {
+        _isRecoveringPlayback = false;
       }
     }
   }

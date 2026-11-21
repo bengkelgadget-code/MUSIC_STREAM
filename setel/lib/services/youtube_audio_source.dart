@@ -26,6 +26,22 @@ class StreamChunkException implements Exception {
       'StreamChunkException(videoId: $videoId, range: $range, status: $statusCode, message: $message)';
 }
 
+class SeekBeyondEofException extends StreamChunkException {
+  final int? totalBytes;
+
+  SeekBeyondEofException({
+    super.videoId,
+    required super.range,
+    required super.statusCode,
+    required super.message,
+    this.totalBytes,
+  });
+
+  @override
+  String toString() =>
+      'SeekBeyondEofException(videoId: $videoId, range: $range, status: $statusCode, totalBytes: $totalBytes, message: $message)';
+}
+
 /// Custom [StreamAudioSource] untuk memutar YouTube audio stream tanpa hambatan.
 ///
 /// Melalui kelas ini, just_audio menjalankan proxy lokal (127.0.0.1) sehingga ExoPlayer
@@ -33,7 +49,11 @@ class StreamChunkException implements Exception {
 /// dalam chunk aman (512KB) dengan User-Agent yang sesuai serta retry otomatis bila ada gangguan jaringan.
 class YouTubeAudioSource extends StreamAudioSource {
   static ChunkErrorInfo? lastChunkError;
-  static void resetLastChunkError() => lastChunkError = null;
+  static StreamChunkException? lastChunkException;
+  static void resetLastChunkError() {
+    lastChunkError = null;
+    lastChunkException = null;
+  }
 
   final Uri uri;
   final Map<String, String> headers;
@@ -139,12 +159,22 @@ class YouTubeAudioSource extends StreamAudioSource {
                       '[YouTubeAudioSource] totalBytes <= 0 dan server membalas 416, stream berakhir normal.');
                   return;
                 }
-                throw StreamChunkException(
+                lastChunkError = ChunkErrorInfo(
+                  videoId: videoId,
+                  statusCode: 416,
+                  range: '$current-$to',
+                  clientName: clientName,
+                );
+                final beyondEofErr = SeekBeyondEofException(
                   videoId: videoId,
                   range: '$current-$to',
                   statusCode: 416,
-                  message: 'Range Not Satisfiable di tengah pemutaran',
+                  totalBytes: currentTotalBytes,
+                  message:
+                      'seek-beyond-eof: Range Not Satisfiable ($current-$to) totalBytes=$currentTotalBytes',
                 );
+                lastChunkException = beyondEofErr;
+                throw beyondEofErr;
               }
 
               // Status harus 206 (Partial Content) atau 200 (OK)
@@ -204,13 +234,15 @@ class YouTubeAudioSource extends StreamAudioSource {
 
                 debugPrint(
                     '[YouTubeAudioSource] Stream berakhir prematur / gagal setelah 3x retry pada range $current-$to (status: ${resp.statusCode}, videoId: $videoId)');
-                throw StreamChunkException(
+                final chunkErr = StreamChunkException(
                   videoId: videoId,
                   range: '$current-$to',
                   statusCode: resp.statusCode,
                   message:
                       'Gagal streaming chunk setelah 3 percobaan (status: ${resp.statusCode})',
                 );
+                lastChunkException = chunkErr;
+                throw chunkErr;
               }
 
               // 1C: Pada respons 206 PERTAMA tiap byteStream, parse TOTAL dari Content-Range (bytes a-b/TOTAL)
@@ -302,13 +334,15 @@ class YouTubeAudioSource extends StreamAudioSource {
                 );
                 debugPrint(
                     '[YouTubeAudioSource] Stream berakhir prematur / gagal: body pendek setelah 3x retry pada range $current-$to (videoId: $videoId)');
-                throw StreamChunkException(
+                final chunkErr = StreamChunkException(
                   videoId: videoId,
                   range: '$current-$to',
                   statusCode: resp.statusCode,
                   message:
                       'Body lebih pendek dari yang diminta (${chunkBuffer.length}/$expectedBytes bytes) setelah 3x retry',
                 );
+                lastChunkException = chunkErr;
+                throw chunkErr;
               }
 
               // Chunk sukses: emit byte ke stream dan majukan current
@@ -345,13 +379,15 @@ class YouTubeAudioSource extends StreamAudioSource {
                   );
                   debugPrint(
                       '[YouTubeAudioSource] Stream berakhir prematur / gagal: timeout baca chunk setelah 3x retry pada range $current-$to (videoId: $videoId)');
-                  throw StreamChunkException(
+                  final chunkErr = StreamChunkException(
                     videoId: videoId,
                     range: '$current-$to',
                     statusCode: null,
                     message:
                         'Timeout baca chunk (tidak ada byte ${chunkTimeout.inSeconds} detik)',
                   );
+                  lastChunkException = chunkErr;
+                  throw chunkErr;
                 }
                 await Future.delayed(const Duration(milliseconds: 250));
                 continue;

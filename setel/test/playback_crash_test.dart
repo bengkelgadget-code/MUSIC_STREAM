@@ -113,6 +113,9 @@ class FailingAudioPlayerService implements AudioPlayerService {
 
   @override
   void clearPlaybackError() {}
+
+  @override
+  String? get playbackError => null;
 }
 
 class FakeConnectivity implements Connectivity {
