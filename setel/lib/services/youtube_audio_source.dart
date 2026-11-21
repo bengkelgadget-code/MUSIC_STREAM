@@ -35,14 +35,14 @@ class YouTubeAudioSource extends StreamAudioSource {
   static ChunkErrorInfo? lastChunkError;
   static void resetLastChunkError() => lastChunkError = null;
 
-  Uri uri;
-  Map<String, String> headers;
+  final Uri uri;
+  final Map<String, String> headers;
   final int totalBytes;
   final String contentType;
   final String? videoId;
   final String? clientName;
   final bool isOpus;
-  final Future<({Uri url, Map<String, String> headers})> Function(
+  final Future<({Uri url, Map<String, String> headers, int totalBytes})> Function(
       {bool fallbackNonOpus})? onReResolveUrl;
   final HttpClient? httpClient;
   final Duration chunkTimeout;
@@ -74,6 +74,9 @@ class YouTubeAudioSource extends StreamAudioSource {
       var client = httpClient ?? HttpClient();
       client.connectionTimeout = const Duration(seconds: 10);
       const chunkSize = 512 * 1024; // 512 KB chunk aman & responsif
+      var currentUri = uri;
+      var currentHeaders = Map<String, String>.of(headers);
+      var currentTotalBytes = totalBytes;
       var current = startByte;
       int? effectiveEnd = requestedEnd;
       bool hasReResolved416 = false;
@@ -94,18 +97,18 @@ class YouTubeAudioSource extends StreamAudioSource {
             HttpClientRequest? req;
             HttpClientResponse? resp;
             try {
-              req = await client.getUrl(uri);
-              headers.forEach((k, v) => req!.headers.set(k, v));
+              req = await client.getUrl(currentUri);
+              currentHeaders.forEach((k, v) => req!.headers.set(k, v));
               req.headers.set('Range', 'bytes=$current-$to');
               resp = await req.close().timeout(chunkTimeout);
 
               // Status 416 (Range Not Satisfiable)
               if (resp.statusCode == 416) {
                 debugPrint(
-                    '[YouTubeAudioSource] Status 416 diterima (current: $current, totalBytes: $totalBytes, videoId: $videoId)');
-                if (totalBytes > 0 && current >= totalBytes) {
+                    '[YouTubeAudioSource] Status 416 diterima (current: $current, totalBytes: $currentTotalBytes, videoId: $videoId)');
+                if (currentTotalBytes > 0 && current >= currentTotalBytes) {
                   debugPrint(
-                      '[YouTubeAudioSource] current ($current) >= totalBytes ($totalBytes), stream berakhir normal.');
+                      '[YouTubeAudioSource] current ($current) >= totalBytes ($currentTotalBytes), stream berakhir normal.');
                   return;
                 }
                 // Bila belum mencapai totalBytes, coba resolve ulang URL stream 1x lalu lanjutkan
@@ -115,15 +118,23 @@ class YouTubeAudioSource extends StreamAudioSource {
                       '[YouTubeAudioSource] Mencoba re-resolve URL stream untuk 416 pada videoId: $videoId...');
                   try {
                     final fresh = await onReResolveUrl!();
-                    uri = fresh.url;
-                    headers = fresh.headers;
+                    currentUri = fresh.url;
+                    currentHeaders = Map<String, String>.of(fresh.headers);
+                    if (fresh.totalBytes > 0 && fresh.totalBytes != currentTotalBytes) {
+                      debugPrint(
+                          '[YouTubeAudioSource] totalBytes diperbarui via re-resolve 416: lama=$currentTotalBytes baru=${fresh.totalBytes} (videoId: $videoId)');
+                      currentTotalBytes = fresh.totalBytes;
+                      if (requestedEnd == null || requestedEnd == totalBytes) {
+                        effectiveEnd = fresh.totalBytes;
+                      }
+                    }
                     continue;
                   } catch (e) {
                     debugPrint(
                         '[YouTubeAudioSource] Gagal re-resolve URL stream untuk 416: $e');
                   }
                 }
-                if (totalBytes <= 0) {
+                if (currentTotalBytes <= 0) {
                   debugPrint(
                       '[YouTubeAudioSource] totalBytes <= 0 dan server membalas 416, stream berakhir normal.');
                   return;
@@ -159,8 +170,16 @@ class YouTubeAudioSource extends StreamAudioSource {
                   try {
                     final fresh =
                         await onReResolveUrl!(fallbackNonOpus: isOpus);
-                    uri = fresh.url;
-                    headers = fresh.headers;
+                    currentUri = fresh.url;
+                    currentHeaders = Map<String, String>.of(fresh.headers);
+                    if (fresh.totalBytes > 0 && fresh.totalBytes != currentTotalBytes) {
+                      debugPrint(
+                          '[YouTubeAudioSource] totalBytes diperbarui via self-healing: lama=$currentTotalBytes baru=${fresh.totalBytes} (videoId: $videoId)');
+                      currentTotalBytes = fresh.totalBytes;
+                      if (requestedEnd == null || requestedEnd == totalBytes) {
+                        effectiveEnd = fresh.totalBytes;
+                      }
+                    }
                     debugPrint(
                         '[YouTubeAudioSource] Self-healing re-resolve berhasil untuk range $current-$to (status: ${resp.statusCode}, URL baru: ${fresh.url})');
                     continue; // Coba chunk yang SAMA lagi dengan URL baru
@@ -212,9 +231,10 @@ class YouTubeAudioSource extends StreamAudioSource {
                   final serverTotal = int.tryParse(totalPart);
                   if (serverTotal != null && serverTotal > 0 && !hasCorrectedTotalBytes) {
                     hasCorrectedTotalBytes = true;
-                    if (serverTotal != totalBytes) {
+                    if (serverTotal != currentTotalBytes) {
                       debugPrint(
-                          '[YouTubeAudioSource] totalBytes dikoreksi manifest=$totalBytes server=$serverTotal videoId=$videoId');
+                          '[YouTubeAudioSource] totalBytes dikoreksi manifest=$currentTotalBytes server=$serverTotal videoId=$videoId');
+                      currentTotalBytes = serverTotal;
                       if (requestedEnd == null || requestedEnd == totalBytes) {
                         effectiveEnd = serverTotal;
                       }
@@ -365,7 +385,7 @@ class YouTubeAudioSource extends StreamAudioSource {
         }
 
         // Stream selesai normal
-        final finalTotal = effectiveEnd ?? totalBytes;
+        final finalTotal = effectiveEnd ?? currentTotalBytes;
         debugPrint(
             '[YouTubeAudioSource] Stream selesai normal videoId=$videoId totalBytes=$finalTotal totalStreamed=$totalStreamedBytes');
       } finally {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive/hive.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants.dart';
 import '../../services/update_service.dart';
@@ -141,13 +142,26 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   int _cacheSizeBytes = 0;
   bool _isLoadingCache = true;
-  String _appVersion = '1.3.13+31';
+  String _appVersion = '1.3.14+32';
+  bool _autoDownloadUpdate = true;
 
   @override
   void initState() {
     super.initState();
     _loadCacheSize();
     _loadAppVersion();
+    _loadAutoDownloadPreference();
+  }
+
+  Future<void> _loadAutoDownloadPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (mounted) {
+        setState(() {
+          _autoDownloadUpdate = prefs.getBool('autoDownloadUpdate') ?? true;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadAppVersion() async {
@@ -668,6 +682,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             trailing: const Icon(Icons.chevron_right, color: Colors.white38),
             onTap: () =>
                 UpdateService.checkUpdate(context, showNoUpdateToast: true),
+          ),
+          SwitchListTile(
+            secondary:
+                const Icon(Icons.cloud_download_outlined, color: Colors.white70),
+            title: const Text('Unduh update otomatis',
+                style: TextStyle(color: Colors.white)),
+            subtitle: const Text(
+                'Unduh pembaruan otomatis di latar belakang saat tersedia',
+                style: TextStyle(color: Colors.white38, fontSize: 13)),
+            value: _autoDownloadUpdate,
+            activeTrackColor: const Color(0xFF1DB954),
+            onChanged: (val) async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('autoDownloadUpdate', val);
+              setState(() {
+                _autoDownloadUpdate = val;
+              });
+            },
           ),
           const ListTile(
             leading:

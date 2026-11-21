@@ -187,7 +187,7 @@ Future<SetelAudioHandler> initAudioService() async {
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.bengkel.setel.channel.audio',
       androidNotificationChannelName: 'Setel Audio Playback',
-      androidNotificationOngoing: false,
+      androidNotificationOngoing: true,
       androidStopForegroundOnPause: true,
       androidShowNotificationBadge: true,
     ),

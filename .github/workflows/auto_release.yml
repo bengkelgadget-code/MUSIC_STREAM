@@ -54,6 +54,21 @@ jobs:
           echo "VERSION_TAG=v$VERSION_NAME" >> $GITHUB_ENV
           echo "Mendeteksi versi: v$VERSION_NAME (Build $VERSION_CODE)"
 
+      - name: Validate Version against Latest Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST_TAG=$(gh release view --repo "${{ github.repository }}" --json tagName -q .tagName 2>/dev/null || echo "")
+          if [ -n "$LATEST_TAG" ]; then
+            echo "Rilis GitHub terakhir terdeteksi: $LATEST_TAG"
+            if [ "$LATEST_TAG" = "${{ env.VERSION_TAG }}" ]; then
+              echo "::error::Tag rilis ${{ env.VERSION_TAG }} sudah ada di GitHub Releases! Harap naikkan versi."
+              exit 1
+            fi
+          else
+            echo "Belum ada rilis GitHub sebelumnya. Melanjutkan sebagai rilis awal."
+          fi
+
       - name: Setup Release Keystore & key.properties
         run: |
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
@@ -87,6 +102,15 @@ jobs:
       - name: Rename APK
         run: mv setel/build/app/outputs/flutter-apk/app-release.apk Setel.apk
 
+      - name: Calculate APK Checksum & Size
+        run: |
+          APK_SHA256=$(sha256sum Setel.apk | awk '{print $1}')
+          APK_SIZE=$(wc -c < Setel.apk | tr -d ' ')
+          echo "APK_SHA256=$APK_SHA256" >> $GITHUB_ENV
+          echo "APK_SIZE=$APK_SIZE" >> $GITHUB_ENV
+          echo "APK SHA-256: $APK_SHA256"
+          echo "APK Size: $APK_SIZE bytes"
+
       - name: Update version.json
         run: |
           {
@@ -95,6 +119,8 @@ jobs:
             echo "  \"version_name\": \"${{ env.VERSION_NAME }}\","
             echo "  \"download_url\": \"https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION_TAG }}/Setel.apk\","
             echo "  \"changelog\": \"Pembaruan otomatis dari GitHub Actions versi ${{ env.VERSION_TAG }}.\","
+            echo "  \"apk_checksum\": \"${{ env.APK_SHA256 }}\","
+            echo "  \"apk_size_bytes\": ${{ env.APK_SIZE }},"
             echo "  \"force_update\": false"
             echo "}"
           } > version.json

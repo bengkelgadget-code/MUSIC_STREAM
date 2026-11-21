@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:audio_session/audio_session.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -165,6 +166,10 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   bool _hasSuccessfulPlayThisSession = false;
   int? _activeStreamTotalBytes;
 
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
+  bool _pausedByFocusInterruption = false;
+  bool? _lastPlayingState;
+
   bool _isSourceError(Object error) {
     Object current = error;
     while (current is AppException && current.cause != null) {
@@ -205,6 +210,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     LibraryService? libraryService,
     CacheService? cacheService,
     Connectivity? connectivity,
+    Stream<AudioInterruptionEvent>? testInterruptionStream,
   })  : _player = player ?? AudioPlayer(),
         _youTubeService = youTubeService,
         _audioHandler = audioHandler,
@@ -213,10 +219,69 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
         _connectivity = connectivity ?? Connectivity() {
     _initListeners();
     _connectAudioHandler();
+    if (testInterruptionStream != null) {
+      _listenToInterruptionStream(testInterruptionStream);
+    } else {
+      _initAudioSession();
+    }
+  }
+
+  Future<void> _initAudioSession() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+      _listenToInterruptionStream(session.interruptionEventStream);
+    } catch (e) {
+      debugPrint('[AudioPlayerService] Inisialisasi AudioSession gagal: $e');
+    }
+  }
+
+  void _listenToInterruptionStream(Stream<AudioInterruptionEvent> stream) {
+    _interruptionSub?.cancel();
+    _interruptionSub = stream.listen((event) {
+      if (event.begin) {
+        debugPrint('[AudioPlayerService] FOCUS: begin type=${event.type}');
+        switch (event.type) {
+          case AudioInterruptionType.duck:
+            break;
+          case AudioInterruptionType.pause:
+          case AudioInterruptionType.unknown:
+            if (_player.playing) {
+              _pausedByFocusInterruption = true;
+              saveCurrentPosition();
+              debugPrint(
+                  '[AudioPlayerService] FOCUS: terhenti oleh interupsi focus, posisi tersimpan: ${_player.position}');
+            }
+            break;
+        }
+      } else {
+        debugPrint('[AudioPlayerService] FOCUS: end');
+        switch (event.type) {
+          case AudioInterruptionType.duck:
+            break;
+          case AudioInterruptionType.pause:
+          case AudioInterruptionType.unknown:
+            if (_pausedByFocusInterruption) {
+              _pausedByFocusInterruption = false;
+              debugPrint(
+                  '[AudioPlayerService] FOCUS: auto-resuming playback dari posisi terakhir: ${_player.position}');
+              _player.play();
+            }
+            break;
+        }
+      }
+    });
   }
 
   void _initListeners() {
     _playerStateSub = _player.playerStateStream.listen((state) {
+      if (_lastPlayingState != state.playing) {
+        _lastPlayingState = state.playing;
+        final sleepActive =
+            _sleepTimerEndTime != null || _sleepAfterCurrentTrack;
+        debugPrint(
+            '[AudioPlayerService] PLAYING-CHANGED playing=${state.playing} processingState=${state.processingState} position=${_player.position} duration=${_player.duration ?? Duration.zero} queueLen=${_queue.length} sleepTimer=$sleepActive');
+      }
       _emitState();
       _audioHandler.updatePlaybackState(
         isPlaying: state.playing,
@@ -263,6 +328,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   void _connectAudioHandler() {
     _audioHandler.onPlayCallback = () => _player.play();
     _audioHandler.onPauseCallback = () {
+      debugPrint('[AudioPlayerService] PAUSE-DARI-NOTIFIKASI');
+      _pausedByFocusInterruption = false;
       saveCurrentPosition();
       _player.pause();
     };
@@ -270,6 +337,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     _audioHandler.onSkipToPreviousCallback = () => previous();
     _audioHandler.onSeekCallback = (position) => seek(position);
     _audioHandler.onStopCallback = () async {
+      debugPrint('[AudioPlayerService] STOP-DARI-NOTIFIKASI');
+      _pausedByFocusInterruption = false;
       saveCurrentPosition();
       if (_currentlyCachingSong != null) {
         _cacheService?.cancelCache(_currentlyCachingSong!);
@@ -347,13 +416,13 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
                 song.videoId,
                 clientStartIndex: 0,
               );
-              return (url: nonOpus.url, headers: nonOpus.headers);
+              return (url: nonOpus.url, headers: nonOpus.headers, totalBytes: nonOpus.totalBytes);
             }
             final reStream = await _youTubeService.resolveStreamUrl(
               song.videoId,
               clientStartIndex: 0,
             );
-            return (url: reStream.url, headers: reStream.headers);
+            return (url: reStream.url, headers: reStream.headers, totalBytes: reStream.totalBytes);
           },
         );
         await _player.setAudioSource(audioSource, initialPosition: currentPos);
@@ -482,6 +551,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
       // Cek jika sleep timer "Habis lagu ini" aktif
       if (_sleepAfterCurrentTrack) {
+        debugPrint(
+            '[AudioPlayerService] SLEEP-TIMER menyala, pause pada ${DateTime.now()}');
         await _player.pause();
         cancelSleepTimer();
         return;
@@ -700,11 +771,11 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
                   song.videoId,
                   clientStartIndex: 0,
                 );
-                return (url: nonOpus.url, headers: nonOpus.headers);
+                return (url: nonOpus.url, headers: nonOpus.headers, totalBytes: nonOpus.totalBytes);
               }
               final reStream =
                   await _youTubeService.resolveStreamUrl(song.videoId, clientStartIndex: 0);
-              return (url: reStream.url, headers: reStream.headers);
+              return (url: reStream.url, headers: reStream.headers, totalBytes: reStream.totalBytes);
             },
           );
         }
@@ -898,6 +969,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
 
   @override
   Future<void> togglePlayPause() async {
+    _pausedByFocusInterruption = false;
     if (_player.playing) {
       saveCurrentPosition();
       await _player.pause();
@@ -1027,13 +1099,13 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
                   _currentSong!.videoId,
                   clientStartIndex: 0,
                 );
-                return (url: nonOpus.url, headers: nonOpus.headers);
+                return (url: nonOpus.url, headers: nonOpus.headers, totalBytes: nonOpus.totalBytes);
               }
               final reStream = await _youTubeService.resolveStreamUrl(
                 _currentSong!.videoId,
                 clientStartIndex: 0,
               );
-              return (url: reStream.url, headers: reStream.headers);
+              return (url: reStream.url, headers: reStream.headers, totalBytes: reStream.totalBytes);
             },
           );
           await _player.setAudioSource(audioSource, initialPosition: position);
@@ -1166,6 +1238,8 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
     } else if (duration != null) {
       _sleepTimerEndTime = DateTime.now().add(duration);
       _sleepTimer = Timer(duration, () {
+        debugPrint(
+            '[AudioPlayerService] SLEEP-TIMER menyala, pause pada ${DateTime.now()}');
         _player.pause();
         cancelSleepTimer();
       });
@@ -1209,6 +1283,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
   void dispose() {
     saveCurrentPosition();
     _sleepTimer?.cancel();
+    _interruptionSub?.cancel();
     _playerStateSub?.cancel();
     _playbackEventSub?.cancel();
     _positionSub?.cancel();
