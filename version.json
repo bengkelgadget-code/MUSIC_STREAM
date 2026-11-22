@@ -1,9 +1,9 @@
 {
-  "version_code": 33,
-  "version_name": "1.3.15",
-  "download_url": "https://github.com/bengkelgadget-code/MUSIC_STREAM/releases/download/v1.3.15/Setel.apk",
-  "changelog": "Pembaruan otomatis dari GitHub Actions versi v1.3.15.",
-  "apk_checksum": "f135b328e134559d5eed6e2bdad1d6436a30fa9e2110b01b9f8597670eac9fe0",
-  "apk_size_bytes": 59388876,
+  "version_code": 34,
+  "version_name": "1.3.16",
+  "download_url": "https://github.com/bengkelgadget-code/MUSIC_STREAM/releases/download/v1.3.16/Setel.apk",
+  "changelog": "Pembaruan otomatis dari GitHub Actions versi v1.3.16.",
+  "apk_checksum": "0b3325d4e932672cbf91ca0314276c382619c5e784ca13be593595bb966fcce7",
+  "apk_size_bytes": 59405256,
   "force_update": false
 }
