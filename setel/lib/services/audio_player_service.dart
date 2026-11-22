@@ -215,6 +215,7 @@ class AudioPlayerServiceImpl implements AudioPlayerService {
       totalBytes: streamInfo.totalBytes,
       contentType: streamInfo.contentType,
       tag: song,
+      itag: streamInfo.tag,
       videoId: song.videoId,
       clientName: streamInfo.clientName,
       isOpus: streamInfo.isOpus,

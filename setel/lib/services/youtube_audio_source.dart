@@ -42,6 +42,59 @@ class SeekBeyondEofException extends StreamChunkException {
       'SeekBeyondEofException(videoId: $videoId, range: $range, status: $statusCode, totalBytes: $totalBytes, message: $message)';
 }
 
+/// Probe ukuran total (bytes) audio stream dari YouTube CDN via header Content-Range (Range: bytes=0-0).
+/// Mengembalikan total bytes jika berhasil, atau null jika gagal/timeout (tidak pernah throw).
+Future<int?> probeStreamTotalBytes(
+  Uri url,
+  Map<String, String> headers, {
+  int? tag,
+  String? videoId,
+  HttpClient? httpClient,
+  Duration timeout = const Duration(seconds: 5),
+  String logTag = 'YouTubeService',
+}) async {
+  HttpClient? client;
+  final ownsClient = httpClient == null;
+  try {
+    client = httpClient ?? HttpClient();
+    client.connectionTimeout = timeout;
+
+    final req = await client.getUrl(url).timeout(timeout);
+    headers.forEach((k, v) => req.headers.set(k, v));
+    req.headers.set('Range', 'bytes=0-0');
+
+    final resp = await req.close().timeout(timeout);
+    try {
+      if (resp.statusCode == 206) {
+        final contentRange = resp.headers.value('content-range');
+        if (contentRange != null) {
+          final match = RegExp(r'/(\d+)$').firstMatch(contentRange.trim());
+          if (match != null) {
+            final total = int.tryParse(match.group(1) ?? '');
+            if (total != null && total > 0) {
+              debugPrint(
+                  '[$logTag] probe totalBytes itag=${tag ?? 'unknown'}: 0 -> $total (Content-Range)');
+              return total;
+            }
+          }
+        }
+      }
+    } finally {
+      await resp.drain().catchError((_) {});
+    }
+  } catch (e) {
+    debugPrint('[$logTag] probe totalBytes itag=${tag ?? 'unknown'} error: $e');
+  } finally {
+    if (ownsClient && client != null) {
+      client.close(force: true);
+    }
+  }
+
+  debugPrint(
+      '[$logTag] probe totalBytes itag=${tag ?? 'unknown'} GAGAL, tetap 0');
+  return null;
+}
+
 /// Custom [StreamAudioSource] untuk memutar YouTube audio stream tanpa hambatan.
 ///
 /// Melalui kelas ini, just_audio menjalankan proxy lokal (127.0.0.1) sehingga ExoPlayer
@@ -61,11 +114,15 @@ class YouTubeAudioSource extends StreamAudioSource {
   final String contentType;
   final String? videoId;
   final String? clientName;
+  final int? itag;
   final bool isOpus;
   final Future<({Uri url, Map<String, String> headers, int totalBytes})> Function(
       {bool fallbackNonOpus})? onReResolveUrl;
   final HttpClient? httpClient;
   final Duration chunkTimeout;
+
+  Future<int?>? _probeFuture;
+  int? _probedTotalBytes;
 
   YouTubeAudioSource({
     required this.uri,
@@ -74,6 +131,7 @@ class YouTubeAudioSource extends StreamAudioSource {
     required this.contentType,
     this.videoId,
     this.clientName,
+    this.itag,
     this.isOpus = false,
     this.onReResolveUrl,
     this.httpClient,
@@ -81,14 +139,43 @@ class YouTubeAudioSource extends StreamAudioSource {
     super.tag,
   });
 
+  // Invariant: bila rangeRequestsSupported == true dan ada kemungkinan request range masuk,
+  // contentLength untuk request range terbuka tidak boleh null.
   @override
   Future<StreamAudioResponse> request([int? start, int? end]) async {
     final startByte = start ?? 0;
-    // Bila totalBytes <= 0 (tidak diketahui): JANGAN batasi stream ke 512KB pertama.
-    // sourceLength = null dan endByte mengikuti end yang diminta ExoPlayer.
+
+    int effectiveTotalBytes = totalBytes;
+    if (effectiveTotalBytes <= 0) {
+      if (_probedTotalBytes == null) {
+        _probeFuture ??= probeStreamTotalBytes(
+          uri,
+          headers,
+          tag: itag ?? (tag is int ? tag as int : null),
+          videoId: videoId,
+          httpClient: httpClient,
+          logTag: 'YouTubeAudioSource',
+        );
+        _probedTotalBytes = await _probeFuture;
+      }
+      if (_probedTotalBytes != null && _probedTotalBytes! > 0) {
+        effectiveTotalBytes = _probedTotalBytes!;
+      }
+    }
+
+    final bool rangeSupported = effectiveTotalBytes > 0;
+    if (!rangeSupported) {
+      debugPrint(
+          '[YouTubeAudioSource] totalBytes tidak diketahui untuk itag ${itag ?? (tag is int ? tag : 'unknown')} (videoId: $videoId), range dimatikan (seek jadi lambat tapi putar jalan)');
+    }
+
     final int? requestedEnd = (end != null && end > startByte)
         ? end
-        : (totalBytes > 0 ? totalBytes : null);
+        : (effectiveTotalBytes > 0 ? effectiveTotalBytes : null);
+
+    final int? contentLength = requestedEnd != null
+        ? (requestedEnd - startByte)
+        : (rangeSupported ? null : -1);
 
     Stream<List<int>> byteStream() async* {
       var client = httpClient ?? HttpClient();
@@ -96,7 +183,7 @@ class YouTubeAudioSource extends StreamAudioSource {
       const chunkSize = 512 * 1024; // 512 KB chunk aman & responsif
       var currentUri = uri;
       var currentHeaders = Map<String, String>.of(headers);
-      var currentTotalBytes = totalBytes;
+      var currentTotalBytes = effectiveTotalBytes;
       var current = startByte;
       int? effectiveEnd = requestedEnd;
       bool hasReResolved416 = false;
@@ -432,10 +519,10 @@ class YouTubeAudioSource extends StreamAudioSource {
     }
 
     return StreamAudioResponse(
-      rangeRequestsSupported: true,
-      sourceLength: totalBytes > 0 ? totalBytes : null,
-      contentLength: requestedEnd != null ? (requestedEnd - startByte) : null,
-      offset: startByte,
+      rangeRequestsSupported: rangeSupported,
+      sourceLength: rangeSupported ? effectiveTotalBytes : null,
+      contentLength: contentLength,
+      offset: rangeSupported ? startByte : null,
       contentType: contentType,
       stream: byteStream(),
     );

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -10,6 +11,7 @@ import '../core/errors.dart';
 import '../models/search_cache.dart';
 import '../models/song.dart';
 import '../models/song_chapter.dart';
+import 'youtube_audio_source.dart';
 
 int parseIso8601Duration(String isoDuration) {
   if (isoDuration.isEmpty) return 0;
@@ -254,8 +256,27 @@ abstract class YouTubeService {
 
 class YouTubeServiceImpl implements YouTubeService {
   final Dio _dio;
+  final HttpClient? _httpClient;
 
-  YouTubeServiceImpl({Dio? dio}) : _dio = dio ?? Dio();
+  YouTubeServiceImpl({Dio? dio, HttpClient? httpClient})
+      : _dio = dio ?? Dio(),
+        _httpClient = httpClient;
+
+  Future<int?> _probeTotalBytes(
+    Uri url,
+    Map<String, String> headers, {
+    int? tag,
+    String? videoId,
+  }) {
+    return probeStreamTotalBytes(
+      url,
+      headers,
+      tag: tag,
+      videoId: videoId,
+      httpClient: _httpClient,
+      logTag: 'YouTubeService',
+    );
+  }
 
   @override
   Future<List<String>> getSuggestions(String query) async {
@@ -615,16 +636,28 @@ class YouTubeServiceImpl implements YouTubeService {
         final audioStreams = manifest.audioOnly;
         if (audioStreams.isNotEmpty) {
           final audioStream = selectStreamByFormat(audioStreams, streamFormat);
+          var totalBytes = audioStream.size.totalBytes;
+          if (totalBytes <= 0) {
+            final probed = await _probeTotalBytes(
+              audioStream.url,
+              {'User-Agent': candidate.userAgent},
+              tag: audioStream.tag,
+              videoId: videoId,
+            );
+            if (probed != null && probed > 0) {
+              totalBytes = probed;
+            }
+          }
           final contentType =
               audioStream.container.name == 'webm' ? 'audio/webm' : 'audio/mp4';
           debugPrint(
               'Berhasil me-resolve stream audio untuk videoId: $videoId '
-              'menggunakan ${candidate.name} (format: $streamFormat, container: ${audioStream.container.name}, codec: ${audioStream.audioCodec}, tag: ${audioStream.tag}, ${audioStream.bitrate.kiloBitsPerSecond} kbps, ${audioStream.size.totalBytes} bytes)');
+              'menggunakan ${candidate.name} (format: $streamFormat, container: ${audioStream.container.name}, codec: ${audioStream.audioCodec}, tag: ${audioStream.tag}, ${audioStream.bitrate.kiloBitsPerSecond} kbps, $totalBytes bytes)');
           return AudioStreamResult(
             url: audioStream.url,
             headers: {'User-Agent': candidate.userAgent},
             clientName: candidate.name,
-            totalBytes: audioStream.size.totalBytes,
+            totalBytes: totalBytes,
             contentType: contentType,
             tag: audioStream.tag,
             codec: audioStream.audioCodec,
@@ -635,14 +668,26 @@ class YouTubeServiceImpl implements YouTubeService {
         if (manifest.muxed.isNotEmpty) {
           final muxedStream =
               selectMuxedStreamByFormat(manifest.muxed, streamFormat);
+          var totalBytes = muxedStream.size.totalBytes;
+          if (totalBytes <= 0) {
+            final probed = await _probeTotalBytes(
+              muxedStream.url,
+              {'User-Agent': candidate.userAgent},
+              tag: muxedStream.tag,
+              videoId: videoId,
+            );
+            if (probed != null && probed > 0) {
+              totalBytes = probed;
+            }
+          }
           debugPrint(
               'Berhasil me-resolve stream muxed (fallback) untuk videoId: $videoId '
-              'menggunakan ${candidate.name} (format: $streamFormat, tag: ${muxedStream.tag}, ${muxedStream.bitrate.kiloBitsPerSecond} kbps, ${muxedStream.size.totalBytes} bytes)');
+              'menggunakan ${candidate.name} (format: $streamFormat, tag: ${muxedStream.tag}, ${muxedStream.bitrate.kiloBitsPerSecond} kbps, $totalBytes bytes)');
           return AudioStreamResult(
             url: muxedStream.url,
             headers: {'User-Agent': candidate.userAgent},
             clientName: candidate.name,
-            totalBytes: muxedStream.size.totalBytes,
+            totalBytes: totalBytes,
             contentType: 'audio/mp4',
             tag: muxedStream.tag,
             codec: muxedStream.audioCodec,
@@ -674,8 +719,23 @@ class YouTubeServiceImpl implements YouTubeService {
           .timeout(const Duration(seconds: 15));
       if (manifest.muxed.isNotEmpty) {
         final muxed = selectMuxedStreamByFormat(manifest.muxed, streamFormat);
+        var totalBytes = muxed.size.totalBytes;
+        if (totalBytes <= 0) {
+          final probed = await _probeTotalBytes(
+            muxed.url,
+            {
+              'User-Agent':
+                  'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'
+            },
+            tag: muxed.tag,
+            videoId: videoId,
+          );
+          if (probed != null && probed > 0) {
+            totalBytes = probed;
+          }
+        }
         debugPrint(
-            'Fallback muxed berhasil untuk videoId: $videoId (tag: ${muxed.tag})');
+            'Fallback muxed berhasil untuk videoId: $videoId (tag: ${muxed.tag}, $totalBytes bytes)');
         return AudioStreamResult(
           url: muxed.url,
           headers: {
@@ -683,12 +743,27 @@ class YouTubeServiceImpl implements YouTubeService {
                 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'
           },
           clientName: 'androidSdkless-muxed-fallback',
-          totalBytes: muxed.size.totalBytes,
+          totalBytes: totalBytes,
           contentType: 'audio/mp4',
         );
       }
       if (manifest.audioOnly.isNotEmpty) {
         final audio = selectStreamByFormat(manifest.audioOnly, streamFormat);
+        var totalBytes = audio.size.totalBytes;
+        if (totalBytes <= 0) {
+          final probed = await _probeTotalBytes(
+            audio.url,
+            {
+              'User-Agent':
+                  'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'
+            },
+            tag: audio.tag,
+            videoId: videoId,
+          );
+          if (probed != null && probed > 0) {
+            totalBytes = probed;
+          }
+        }
         return AudioStreamResult(
           url: audio.url,
           headers: {
@@ -696,7 +771,7 @@ class YouTubeServiceImpl implements YouTubeService {
                 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'
           },
           clientName: 'androidSdkless-audio-fallback',
-          totalBytes: audio.size.totalBytes,
+          totalBytes: totalBytes,
           contentType:
               audio.container.name == 'webm' ? 'audio/webm' : 'audio/mp4',
         );
@@ -760,16 +835,28 @@ class YouTubeServiceImpl implements YouTubeService {
             return b.bitrate.compareTo(a.bitrate);
           });
           final selected = nonOpus.first;
+          var totalBytes = selected.size.totalBytes;
+          if (totalBytes <= 0) {
+            final probed = await _probeTotalBytes(
+              selected.url,
+              {'User-Agent': candidate.userAgent},
+              tag: selected.tag,
+              videoId: videoId,
+            );
+            if (probed != null && probed > 0) {
+              totalBytes = probed;
+            }
+          }
           final contentType =
               selected.container.name == 'webm' ? 'audio/webm' : 'audio/mp4';
           debugPrint(
               'Berhasil me-resolve non-Opus audio untuk videoId: $videoId '
-              'menggunakan ${candidate.name} (container: ${selected.container.name}, codec: ${selected.audioCodec}, tag: ${selected.tag}, ${selected.bitrate.kiloBitsPerSecond} kbps, ${selected.size.totalBytes} bytes)');
+              'menggunakan ${candidate.name} (container: ${selected.container.name}, codec: ${selected.audioCodec}, tag: ${selected.tag}, ${selected.bitrate.kiloBitsPerSecond} kbps, $totalBytes bytes)');
           return AudioStreamResult(
             url: selected.url,
             headers: {'User-Agent': candidate.userAgent},
             clientName: candidate.name,
-            totalBytes: selected.size.totalBytes,
+            totalBytes: totalBytes,
             contentType: contentType,
             tag: selected.tag,
             codec: selected.audioCodec,
@@ -780,14 +867,26 @@ class YouTubeServiceImpl implements YouTubeService {
           final muxedList = manifest.muxed.toList();
           muxedList.sort((a, b) => b.bitrate.compareTo(a.bitrate));
           final selected = muxedList.first;
+          var totalBytes = selected.size.totalBytes;
+          if (totalBytes <= 0) {
+            final probed = await _probeTotalBytes(
+              selected.url,
+              {'User-Agent': candidate.userAgent},
+              tag: selected.tag,
+              videoId: videoId,
+            );
+            if (probed != null && probed > 0) {
+              totalBytes = probed;
+            }
+          }
           debugPrint(
               'Berhasil me-resolve muxed non-Opus (fallback) untuk videoId: $videoId '
-              'menggunakan ${candidate.name} (tag: ${selected.tag}, ${selected.bitrate.kiloBitsPerSecond} kbps)');
+              'menggunakan ${candidate.name} (tag: ${selected.tag}, ${selected.bitrate.kiloBitsPerSecond} kbps, $totalBytes bytes)');
           return AudioStreamResult(
             url: selected.url,
             headers: {'User-Agent': candidate.userAgent},
             clientName: candidate.name,
-            totalBytes: selected.size.totalBytes,
+            totalBytes: totalBytes,
             contentType: 'audio/mp4',
             tag: selected.tag,
             codec: selected.audioCodec,
